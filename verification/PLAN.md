@@ -51,7 +51,7 @@ minimal reproducing test as evidence before deciding whether to report it.
 ## Status
 
 - [x] **P0 Tooling**: run TLC in a cloud session, pinned versions, one script.
-- [ ] **P1 Code map and informal invariants**: write down, in prose, what
+- [x] **P1 Code map and informal invariants**: write down, in prose, what
       must be true; review each against the code.
 - [ ] **P2 Raft-layer model**: check membership properties on the existing
       upstream spec; calibrate against a known historical bug.
@@ -114,6 +114,10 @@ JSON=$PWD/verification/raft/example.ndjson verification/tools/tlc.sh -workers 1 
 
 ### P1 Code map and informal invariants
 
+**Done:** see [`membership-map.md`](membership-map.md) for the pipeline,
+stores, answers to the questions below, invariants I1–I12 and hypotheses
+H1–H3.
+
 Produce `verification/membership-map.md` covering every path that reads or
 writes membership, and a numbered list of invariants (I1, I2, …) that later
 phases check. Starting points (all confirmed at commit `bf9cadf`):
@@ -125,7 +129,7 @@ phases check. Starting points (all confirmed at commit `bf9cadf`):
 | Proposal and wait | `configure`: registers wait on `cc.ID`, `ProposeConfChange`, waits for apply or ctx timeout |
 | Apply-time validation | `membership/cluster.go` `ValidateConfigurationChange` (reads backend only; skipped when `shouldApplyV3` is false). On failure, `applyConfChange` applies the change with `NodeId = None` |
 | Apply | `server.go` `applyConfChange` → `r.ApplyConfChange`, `beHooks.SetConfState`, `RaftCluster.{AddMember,PromoteMember,RemoveMember,UpdateRaftAttributes}`, transport peer updates |
-| Stores | Raft `ConfState` (persisted via backend hooks), backend members bucket, v2store (`membership/storev2.go`), transport peer set |
+| Stores | Raft `ConfState` (persisted via backend hooks), backend `members` and `members_removed` buckets, in-memory `RaftCluster`, transport peer set. (v2store is no longer used for membership at runtime; see `membership-map.md` §2) |
 | Recovery | `RaftCluster.Recover` (called from `server.go` on snapshot apply), `bootstrap.go`, `storage/util.go` `GetEffectiveNodeIDsFromWALEntries`, `CreateConfigChangeEnts` (force-new-cluster) |
 | Wire format | Only v1 `ConfChange` is proposed: `AddNode`, `AddLearnerNode`, `RemoveNode`, `UpdateNode`. Promote is `AddNode` with `ConfigChangeContext.IsPromote` |
 
@@ -227,7 +231,12 @@ test, affected versions, and severity. Decide disclosure per finding.
 
 ## Findings
 
-_None yet._
+_None confirmed yet._ Open hypotheses (details in `membership-map.md` §5):
+
+- **H1**: members with different `--max-learners` may disagree on membership.
+- **H2**: the promote guard has no live-connectivity check; promoting a
+  caught-up but dead learner may lose quorum.
+- **H3**: add/remove guards may run on a stale membership view.
 
 ## Session log
 
@@ -237,3 +246,7 @@ _None yet._
   Wrote this plan. Decided to include P4 (real-run checking).
 - **2026-10-22**: P0 done: pinned TLC runner, vendored upstream spec,
   baseline runs (see P0 results). Next: P1 code map.
+- **2026-10-22**: P1 done: `membership-map.md`. v2store is out of the
+  runtime membership path; backend `meta/confState` is written but never
+  read. Three hypotheses (H1–H3) to test. Next: P2, plus early Go repro
+  tests for H1/H2 since they are cheap.
