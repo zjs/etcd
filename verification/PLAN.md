@@ -53,7 +53,7 @@ minimal reproducing test as evidence before deciding whether to report it.
 - [x] **P0 Tooling**: run TLC in a cloud session, pinned versions, one script.
 - [x] **P1 Code map and informal invariants**: write down, in prose, what
       must be true; review each against the code.
-- [ ] **P2 Raft-layer model**: check membership properties on the existing
+- [x] **P2 Raft-layer model**: check membership properties on the existing
       upstream spec; calibrate against a known historical bug.
 - [ ] **P3 Server-layer model**: new spec for etcd's membership state
       machine above Raft.
@@ -161,6 +161,87 @@ Questions P1 must answer from the code (not assume):
   learner-promotion fix reported in SysMoBench, adjust the spec to that
   behavior, and confirm TLC finds the bug. If it cannot, the model is too
   coarse for this class of bug.
+
+**P2 results (2026-10-22).** Files are listed in `raft/SOURCE.md`.
+
+*Spec–code differences found and fixed (F1–F3, unconditional):*
+- F1: promoting a learner left it in the learner set.
+- F2: the spec asked learners for votes.
+- F3: one stray vote blocked an election.
+
+*Code rules added as switches (F4–F6; FALSE = upstream behavior):*
+- F4: no campaigning with a committed but unapplied config entry.
+- F5: a new leader may propose a config change only once
+  `applied ≥ lastIndex` at its election. This also fixes an upstream spec
+  bug: the pending marker is cleared on a reversed condition, so the spec
+  never enforced one change at a time.
+- F6: a follower learns the commit index in the same step as it appends.
+
+*Main result: two leaders in one term, unless the code's rules are
+modeled.* `raft/MCwitness.tla` is a 71-step behavior checked by TLC:
+
+1. Initial config C0 = {1,2,3}. Node 1 adds 4 (C1), then removes 3 (C2 =
+   {1,2,4}).
+2. Node 3 has appended both config entries but hasn't learned that C1
+   committed.
+3. In term 3, node 3 wins on C0 with votes {3,1}, and node 2 wins on C2
+   with votes {2,4}.
+
+| F4 (campaign guard) | F6 (atomic commit) | Result |
+|---|---|---|
+| off | off | `MoreThanOneLeaderInv` violated |
+| off | on | violated |
+| on | off | violated |
+| on | on | blocked: node 3 can't campaign |
+
+So the upstream spec admits a split-brain the code prevents. The code
+needs **both** rules to block this behavior.
+
+The supporting property is `KnowsPrevConfigCommittedInv`: a node holding a
+config entry knows the previous one is committed. It depends on:
+- F5 (leader side): a change is proposed only after the previous one is
+  applied, so any message carrying C(n+1) also carries commit ≥ C(n);
+- F6 (follower side): commit is learned atomically with the entries.
+
+F4 then keeps a campaigning node's config within one step of the latest.
+With single-step changes, adjacent configs have overlapping quorums.
+
+*Random simulation, code-faithful (F4–F6 on), all 14 invariants, no
+violations:*
+- `MCmembership.cfg` (reliable network): 37,841 behaviors (mean length
+  127), 5 min.
+- `MCmembership-full.cfg` (crashes, drops, duplicates): 44,009 behaviors,
+  5 min.
+- `MCmembership-upstream.cfg` (F4–F6 off) violates
+  `KnowsPrevConfigCommittedInv` within seconds.
+
+*Limits:*
+- Exhaustive search does not reach the needed depth (~70 steps). BFS was
+  stopped at depth 16–19 with 6–7M states and no violations, both on the
+  general model and on the directed scenario.
+- "Both rules on → safe" is supported by simulation and by blocking the
+  known attack, not proved.
+- The calibration in the plan (#10998) turned out to be a **liveness** bug
+  (elections stalling while a learner refuses to vote). The witness serves
+  as calibration instead: the model finds a safety violation as soon as a
+  code rule is removed.
+
+*Upstream spec issues worth offering to `etcd-io/raft` (spec bugs, not
+code bugs):*
+- F1–F3;
+- the reversed pending-marker reset;
+- missing F4/F6, which lets the spec reach `MoreThanOneLeaderInv`
+  violations (a false alarm against the code);
+- `SYMMETRY` over an asymmetric spec.
+
+*For etcd:* the safety of etcd's apply-time, one-at-a-time
+reconfiguration rests on three code details: `hup`'s unapplied-conf-change
+check, `maybeAppend` committing atomically, and `pendingConfIndex =
+lastIndex` at election. Changing any of them needs the same scrutiny as a
+protocol change.
+
+Trace validation of upstream `example.ndjson` against the patched spec
+(upstream-mode switches): _pending_.
 
 ### P3 Server-layer model
 
@@ -321,3 +402,10 @@ it.**
   remove-based variants predate it. Next: P2.
 - **2026-10-22**: Added `TestH3StaleViewRemove` (reproduced 3/3);
   remove-guard code is equivalent in v3.6.10 and v3.5.29. Next: P2.
+- **2026-10-22**: P2 done.
+  - Fixed 3 spec–code differences; added 3 code rules as switches; fixed
+    the upstream pending-marker bug.
+  - Witness: two leaders in one term unless both the campaign guard and
+    atomic commit are modeled.
+  - Code-faithful simulation is clean (82k behaviors).
+  - Next: confirm trace validation, then P3.

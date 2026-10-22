@@ -1,6 +1,6 @@
 # Source of these files
 
-Copied unchanged from `go.etcd.io/raft/v3@v3.7.0`, directory `tla/` (the
+Copied from `go.etcd.io/raft/v3@v3.7.0`, directory `tla/` (the
 version this repo's `go.mod` uses). Upstream: https://github.com/etcd-io/raft.
 The files keep their original Apache-2.0 headers.
 
@@ -20,9 +20,47 @@ The files keep their original Apache-2.0 headers.
 Upstream's `validate*.sh` download tools from `nightly.tlapl.us` and GitHub,
 which may be unreachable from cloud sessions. Use `../tools/tlc.sh` instead.
 
+## Changes in this fork (P2)
+
+The hashes above are of the upstream originals; `git log -p` on this
+directory shows every change. Each change in the spec is marked `FORK` in
+a comment.
+
+| Id | File | Change | Why |
+|---|---|---|---|
+| F1 | `etcdraft.tla` `AddNewServer` | Promoting a learner removes it from `learners` | Code: `confchange.go` `makeVoter` deletes it from `Learners`. Upstream left it in both sets |
+| F2 | `etcdraft.tla` `RequestVote` | Ask only voters for votes | Code: `raft.go` `campaign` iterates `trk.Voters`. Upstream also asked learners |
+| F3 | `etcdraft.tla` `BecomeLeader` | Count only voters' grants | Code: `tracker.TallyVotes` skips learners. Upstream needed *every* grant to come from a voter, so one stray grant blocked an election (an under-approximation) |
+| F4 | `etcdraft.tla` `Timeout` | New constant `CampaignRequiresAppliedConfig`: when TRUE, a node with committed but unapplied config entries can't campaign | Code: `raft.go` `hup` → `hasUnappliedConfChanges`. Set FALSE in all upstream configs to keep upstream behavior |
+| F5 | `etcdraft.tla` `BecomeLeader`, `CanProposeConf`, `ApplySimpleConfChange` | New constant `LeaderPendingAtElection`: when TRUE, a new leader sets the pending marker to its last index, and a config change is allowed only if marker ≤ commit and no committed config is unapplied. Under F5 the marker is never cleared by `ApplySimpleConfChange` | Code: `raft.go` `becomeLeader` sets `pendingConfIndex = lastIndex`; `stepLeader` refuses while `pendingConfIndex > applied`. Upstream clears the marker when `marker >= k` (reversed); re-applying an old committed config is always enabled, so the one-change-at-a-time rule isn't enforced |
+| F6 | `etcdraft.tla` `NoConflictAppendEntriesRequest` | New constant `AtomicAppendCommit`: when TRUE, a follower learns the commit index in the same step as it appends | Code: `raft.go` `handleAppendEntries` → `raftLog.maybeAppend` → `commitTo(min(m.Commit, lastnewi))`. Upstream updates the commit index in a later step |
+| — | `etcdraft.tla` | New invariants `LearnersVotersDisjointInv`, `ConfigEntryDisjointInv`, `KnowsPrevConfigCommittedInv`, `AtMostOneUncommittedConfigInv` | P2 membership properties |
+| — | `*.cfg` | `CampaignRequiresAppliedConfig`, `AtomicAppendCommit`, `LeaderPendingAtElection` set to FALSE in the upstream configs | Required by F4–F6 |
+
+Known spec–code differences not yet changed:
+
+- `BecomeLeader` doesn't append an empty entry; the code does
+  (`raft.go` `becomeLeader`). A new leader's commit then waits for its
+  next entry. This is more permissive about when config entries can be
+  first in a term.
+- No applied index: "applied" is approximated as described under F4/F5.
+- `MCetcdraft.cfg` uses `SYMMETRY Permutations(Server)`, but `InitServer`
+  and the order of the bootstrap log make the spec asymmetric. The
+  reduction may be unsound. `MCmembership.cfg` doesn't use it.
+
 Files added in this fork (not from upstream):
 
 - `SOURCE.md`: this file.
 - `MCetcdraft-smoke.cfg`: `MCetcdraft.cfg` with smaller bounds for quick
   checks (2 initial members + 1 spare, 1 reconfiguration, 1 client request,
   terms ≤ 3).
+- `MCmembership.tla`: P2 experiments. A reliable-network next-state
+  relation, an in-flight message cap, and directed-scenario wrappers.
+- `MCmembership.cfg`: code-faithful (F4–F6 on), reliable network, 4
+  servers, 2 reconfigurations, all invariants. For `-simulate`.
+- `MCmembership-full.cfg`: the same with crashes, drops and duplicates.
+- `MCmembership-upstream.cfg`: F4–F6 off, full network.
+- `MCscenario.cfg`: directed scenario (who may act is fixed; interleavings
+  are free). Too large for exhaustive search at the depth needed.
+- `MCwitness.tla`, `MCwitness.cfg`: a 71-step hand-written behavior, checked
+  by TLC, that elects two leaders in one term when F4 or F6 is off.

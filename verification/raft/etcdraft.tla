@@ -287,10 +287,41 @@ Restart(i) ==
     /\ config' = [config EXCEPT ![i] = durableState[i].config]
     /\ UNCHANGED <<messages, durableState, reconfigCount>>
 
+\* FORK(F4): code-faithful campaign guard; set FALSE for upstream behavior.
+\* raft.go hup(): a node with committed but unapplied conf changes does not
+\* campaign. The spec has no applied index, so "unapplied" is approximated as
+\* "current config differs from the latest committed config entry".
+CONSTANT CampaignRequiresAppliedConfig
+ASSUME CampaignRequiresAppliedConfig \in BOOLEAN
+
+\* FORK(F6): see NoConflictAppendEntriesRequest; set FALSE for upstream behavior.
+CONSTANT AtomicAppendCommit
+ASSUME AtomicAppendCommit \in BOOLEAN
+
+\* FORK(F5): code-faithful pending-conf-change rule; set FALSE for upstream.
+\* raft.go becomeLeader sets pendingConfIndex = lastIndex, and a conf change
+\* is accepted only if pendingConfIndex <= applied. The spec has no applied
+\* index; "applied" is over-approximated by commitIndex plus "no committed
+\* but unapplied config entry", which admits every behavior the code does.
+CONSTANT LeaderPendingAtElection
+ASSUME LeaderPendingAtElection \in BOOLEAN
+
+HasUnappliedCommittedConfig(i) ==
+    LET k == SelectLastInSubSeq(log[i], 1, commitIndex[i], LAMBDA x: x.type = ConfigEntry)
+    IN /\ k > 0
+       /\ config[i] # [jointConfig |-> << log[i][k].value.newconf, {} >>, learners |-> log[i][k].value.learners]
+
+\* FORK(F5): may leader i append a new config entry?
+CanProposeConf(i) ==
+    IF LeaderPendingAtElection
+    THEN pendingConfChangeIndex[i] <= commitIndex[i] /\ ~HasUnappliedCommittedConfig(i)
+    ELSE pendingConfChangeIndex[i] = 0
+
 \* Server i times out and starts a new election.
 \* @type: Int => Bool;
 Timeout(i) == /\ state[i] \in {Follower, Candidate}
               /\ i \in GetConfig(i)
+              /\ CampaignRequiresAppliedConfig => ~HasUnappliedCommittedConfig(i)
               /\ state' = [state EXCEPT ![i] = Candidate]
               /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]
               /\ votedFor' = [votedFor EXCEPT ![i] = i]
@@ -302,7 +333,9 @@ Timeout(i) == /\ state[i] \in {Follower, Candidate}
 \* @type: (Int, Int) => Bool;
 RequestVote(i, j) ==
     /\ state[i] = Candidate
-    /\ j \in ((GetConfig(i) \union GetLearners(i)) \ votesResponded[i])
+    \* FORK(F2): code sends MsgVote only to voters (raft.go campaign:
+    \* r.trk.Voters.IDs()); upstream spec also asked learners.
+    /\ j \in (GetConfig(i) \ votesResponded[i])
     /\ IF i # j 
         THEN Send([mtype            |-> RequestVoteRequest,
                    mterm            |-> currentTerm[i],
@@ -374,11 +407,18 @@ SendSnapshot(i, j, index) ==
 \* @type: Int => Bool;
 BecomeLeader(i) ==
     /\ state[i] = Candidate
-    /\ votesGranted[i] \in Quorum(GetConfig(i))
+    \* FORK(F3): code tallies only voters (tracker.TallyVotes skips
+    \* learners and non-members); upstream required every granted vote to
+    \* come from a voter, so a single stray vote blocked the election.
+    /\ (votesGranted[i] \cap GetConfig(i)) \in Quorum(GetConfig(i))
     /\ state'      = [state EXCEPT ![i] = Leader]
     /\ matchIndex' = [matchIndex EXCEPT ![i] =
                          [j \in Server |-> IF j = i THEN Len(log[i]) ELSE 0]]
-    /\ UNCHANGED <<messageVars, currentTerm, votedFor, pendingConfChangeIndex, candidateVars, logVars, configVars, durableState>>
+    \* FORK(F5)
+    /\ pendingConfChangeIndex' = IF LeaderPendingAtElection
+                                 THEN [pendingConfChangeIndex EXCEPT ![i] = Len(log[i])]
+                                 ELSE pendingConfChangeIndex
+    /\ UNCHANGED <<messageVars, currentTerm, votedFor, candidateVars, logVars, configVars, durableState>>
     
 Replicate(i, v, t) == 
     /\ t \in {ValueEntry, ConfigEntry}
@@ -427,8 +467,10 @@ AddNewServer(i, j) ==
     /\ state[i] = Leader
     /\ j \notin GetConfig(i)
     /\ ~IsJointConfig(i)
-    /\ IF pendingConfChangeIndex[i] = 0 THEN
-            /\ Replicate(i, [newconf |-> GetConfig(i) \union {j}, learners |-> GetLearners(i)], ConfigEntry)
+    /\ IF CanProposeConf(i) THEN
+            \* FORK(F1): promoting a learner removes it from the learner set
+            \* (confchange.go makeVoter); upstream kept it in both sets.
+            /\ Replicate(i, [newconf |-> GetConfig(i) \union {j}, learners |-> GetLearners(i) \ {j}], ConfigEntry)
             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
        ELSE 
             /\ Replicate(i, <<>>, ValueEntry)
@@ -440,7 +482,7 @@ AddLearner(i, j) ==
     /\ state[i] = Leader
     /\ j \notin GetConfig(i) \union GetLearners(i)
     /\ ~IsJointConfig(i)
-    /\ IF pendingConfChangeIndex[i] = 0 THEN 
+    /\ IF CanProposeConf(i) THEN 
             /\ Replicate(i, [newconf |-> GetConfig(i), learners |-> GetLearners(i) \union {j}], ConfigEntry)
             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
        ELSE 
@@ -453,7 +495,7 @@ DeleteServer(i, j) ==
     /\ state[i] = Leader
     /\ j \in GetConfig(i) \union GetLearners(i)
     /\ ~IsJointConfig(i)
-    /\ IF pendingConfChangeIndex[i] = 0 THEN
+    /\ IF CanProposeConf(i) THEN
             /\ Replicate(i, [newconf |-> GetConfig(i) \ {j}, learners |-> GetLearners(i) \ {j}], ConfigEntry)
             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
        ELSE 
@@ -468,7 +510,18 @@ ApplySimpleConfChange(i) ==
             /\ k > 0
             /\ k <= commitIndex[i]
             /\ config' = ApplyConfigUpdate(i, k)
-            /\ IF state[i] = Leader /\ pendingConfChangeIndex[i] >= k THEN 
+            \* FORK(F5): upstream clears the pending marker when the marker is
+            \* >= the applied index k, and re-applying an old committed config
+            \* is always enabled, so a leader can clear it at will and stack a
+            \* second uncommitted config entry. The code allows a new change only
+            \* once applied >= pendingConfIndex (CanProposeConf), so under F5
+            \* the marker is left alone and only the leader's own change counts.
+            /\ IF LeaderPendingAtElection
+               THEN /\ IF state[i] = Leader /\ k = pendingConfChangeIndex[i] /\ config[i] # config'[i]
+                       THEN reconfigCount' = reconfigCount + 1
+                       ELSE UNCHANGED reconfigCount
+                    /\ UNCHANGED pendingConfChangeIndex
+               ELSE IF state[i] = Leader /\ pendingConfChangeIndex[i] >= k THEN 
                 /\ reconfigCount' = reconfigCount + 1
                 /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i] = 0]
                ELSE UNCHANGED <<reconfigCount, pendingConfChangeIndex>>
@@ -597,7 +650,13 @@ NoConflictAppendEntriesRequest(i, index, m) ==
     /\ index > commitIndex[i]
     /\ HasNoConflict(i, index, m.mentries)
     /\ log' = [log EXCEPT ![i] = @ \o SubSeq(m.mentries, Len(@)-index+2, Len(m.mentries))]
-    /\ UNCHANGED <<messageVars, serverVars, commitIndex, durableState>>
+    \* FORK(F6): the code learns the commit index in the same step as it
+    \* appends (raft.go handleAppendEntries -> raftLog.maybeAppend:
+    \* commitTo(min(m.Commit, lastnewi))). Upstream does it in a later step.
+    /\ IF AtomicAppendCommit
+       THEN CommitTo(i, Min({m.mcommitIndex, m.mprevLogIndex + Len(m.mentries)}))
+       ELSE UNCHANGED commitIndex
+    /\ UNCHANGED <<messageVars, serverVars, durableState>>
 
 \* @type: (Int, Int, Bool, AEREQT) => Bool;
 AcceptAppendEntriesRequest(i, j, logOk, m) ==
@@ -872,6 +931,35 @@ LeaderCompletenessInv ==
 CommittedIsDurableInv ==
     \A i \in Server :
         state[i] = Leader => commitIndex[i] <= durableState[i].log
+
+\* FORK: membership invariants (verification/membership-map.md).
+
+\* No server is both a voter and a learner in any server's config.
+LearnersVotersDisjointInv ==
+    \A i \in Server : GetConfig(i) \cap GetLearners(i) = {}
+
+\* A config entry's learner and voter sets are disjoint too.
+ConfigEntryDisjointInv ==
+    \A i \in Server : \A k \in 1..Len(log[i]) :
+        log[i][k].type = ConfigEntry => log[i][k].value.newconf \cap log[i][k].value.learners = {}
+
+\* A server holding a config entry knows the previous config entry is
+\* committed. With single-step changes this keeps every campaigning node's
+\* config within one step of the latest (see verification/PLAN.md, P2).
+KnowsPrevConfigCommittedInv ==
+    \A i \in Server :
+        LET cfgIdx == {k \in 1..Len(log[i]) : log[i][k].type = ConfigEntry}
+            last == MaxOrZero(cfgIdx)
+            prev == MaxOrZero(cfgIdx \ {last})
+        IN prev <= commitIndex[i]
+
+\* Diagnostic: a leader's log holds at most one config entry above its
+\* commit index. The code enforces this via pendingConfIndex (set to the
+\* last index on election); the upstream spec does not, so a violation here
+\* shows the spec exploring behaviors the code forbids.
+AtMostOneUncommittedConfigInv ==
+    \A i \in Server : state[i] = Leader =>
+        Cardinality({k \in (commitIndex[i]+1)..Len(log[i]) : log[i][k].type = ConfigEntry}) <= 1
 
 -----
 
