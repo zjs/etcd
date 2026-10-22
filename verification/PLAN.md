@@ -244,6 +244,54 @@ details in `membership-map.md` §5). Run with
 P5 for each: search upstream issues and PRs, find affected versions, rate
 severity, then decide on disclosure.
 
+### Upstream search (2026-10-22)
+
+Method: web search of `etcd-io/etcd` issues and PRs, reading the linked
+threads, and searching upstream commit history and release branches. The
+GitHub issue API was not available in the session, so "nothing found" means
+not found by these searches, not "definitely unreported".
+
+**H1 (mixed `--max-learners`): risk acknowledged, consequence not
+discussed.**
+- The flag was added in PR #13377 (2021, experimental; made GA as
+  `--max-learners` in 3.6, `27d9978c8`, `06edd83d2`).
+- The PR description says members can technically be started with
+  different values, and that "care was taken" to validate.
+- A reviewer said a mismatch "could cause hard to debug behavior on leader
+  change" and proposed a metric hashing the config that must match across
+  members. It was left as a follow-up; no implementation found.
+- Nobody discussed that the limit is checked when applying log entries, so
+  members diverge.
+- Affects 3.6.x and main. Not 3.5: there the limit is a constant 1
+  (`release-3.5` `cluster.go:46`).
+
+**H2 (promote without a liveness check): no report found.**
+- Promote guard history: `dfe296ac3` (2019, `mayPromote` check), then
+  `6991f619f` (2020, PR #11640 for #11633). That fix made the guard count
+  the learner as "started" so N→N+1 promotion works. It does not consider
+  whether the learner is reachable now.
+- Issue #12186 (promotion while quorum is already lost) is a different
+  question.
+- Unchanged since 2020 on release-3.5, release-3.6 and main, so it affects
+  every release with learner promotion (3.4.5+ by the 2020 date; exact 3.4
+  tag not checked).
+
+**H3 (guards on stale views): no report found; one recent change widens
+it.**
+- PR #21641 (fixes #21640, merged 2026-04-26) relaxed the add guard from
+  "connected to all voters" to "connected to quorum(n+1)". It was
+  backported in v3.6.11 and v3.5.30 (both 2026-05-01). Review discussed
+  quorum after the add, but not races or stale views.
+- `TestH3StaleViewAddVoter` needs one voter down, which the old guard
+  refused. So **this specific scenario affects only v3.6.11+, v3.5.30+
+  and main.**
+- Rerunning `explore/guard_enum.py` with the old add guard still finds
+  1,514 stale-view cases (e.g. remove → remove on 4 voters), so **H3 as a
+  class predates #21641.** Follow-up: add a remove → remove reproduction
+  test that applies to older versions.
+- Adjacent, not the same: k0sproject/k0s#8530 (remove guard counts a
+  partitioned peer as connected) and canonical/k8sd#159.
+
 ## Session log
 
 - **2026-10-22**: Surveyed existing work: upstream raft TLA+ spec and trace
@@ -259,3 +307,7 @@ severity, then decide on disclosure.
 - **2026-10-22**: Reproduced H1, H2 and H3 with integration tests (build
   tag `verification`). The guard enumeration shows stale-view gaps only from
   even voter counts. Next: P2.
+- **2026-10-22**: Upstream search for H1–H3 (see Findings). None found as
+  reported; H1's misconfiguration risk was noted in PR #13377 review. H3's
+  add-voter variant is enabled by PR #21641 (v3.6.11/v3.5.30); the
+  remove-based variants predate it. Next: P2.
