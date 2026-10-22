@@ -25,6 +25,7 @@ package verification
 
 import (
 	"context"
+	"os"
 	"sort"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
+	"go.etcd.io/etcd/client/pkg/v3/types"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/storage/schema"
 	"go.etcd.io/etcd/tests/v3/framework/integration"
@@ -404,4 +406,69 @@ func TestH3StaleViewRemove(t *testing.T) {
 	if err != nil {
 		t.Errorf("H3 reproduced (remove): stale-view guard accepted a removal that left no quorum (put: %v)", err)
 	}
+}
+
+// TestH1cExtraLearnerStartPanics follows H1 one step further: the learner
+// that only member 0 accepted is started. When it publishes its name, the
+// members that rejected it apply a ClusterMemberAttrSet for an unknown,
+// non-removed member, and RaftCluster.UpdateAttributes panics.
+//
+// A member panic aborts the whole test process, so this test only runs
+// with VERIFICATION_ALLOW_PANIC=1; the reproduction is the panic message
+// "failed to update; member unknown" from members m1 and m2.
+func TestH1cExtraLearnerStartPanics(t *testing.T) {
+	if os.Getenv("VERIFICATION_ALLOW_PANIC") != "1" {
+		t.Skip("set VERIFICATION_ALLOW_PANIC=1; a reproduction aborts the test process")
+	}
+	integration.BeforeTest(t)
+
+	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 3, MaxLearners: 1, DisableStrictReconfigCheck: true})
+	defer clus.Terminate(t)
+
+	m0 := clus.Members[0]
+	m0.Stop(t)
+	m0.MaxLearners = 2
+	require.NoError(t, m0.Restart(t))
+	clus.WaitLeader(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	// Only member 0's raft config will include the second learner, so it
+	// gets replication (and can publish) only while member 0 leads.
+	if lead := clus.WaitLeader(t); lead != 0 {
+		_, err := clus.Client(lead).MoveLeader(ctx, uint64(m0.Server.MemberID()))
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return clus.WaitLeader(t) == 0 }, 10*time.Second, 100*time.Millisecond)
+	}
+
+	// First learner: accepted everywhere; never started.
+	const firstURL = "http://127.0.0.1:11001"
+	_, err := clus.Client(0).MemberAddAsLearner(ctx, []string{firstURL})
+	require.NoError(t, err)
+
+	// Second learner: accepted only by member 0. It runs with
+	// --max-learners=2 itself, or it would refuse to join.
+	l2 := clus.MustNewMember(t)
+	l2.MaxLearners = 2
+	_, err = clus.Client(0).MemberAddAsLearner(ctx, l2.PeerURLs.StringSlice())
+	require.NoError(t, err)
+
+	// Join through member 0, the only member that lists l2. The initial
+	// cluster must name every member in member 0's view.
+	l2.IsLearner = true
+	l2.NewCluster = false
+	l2.InitialPeerURLsMap = types.URLsMap{"first-learner": types.MustNewURLs([]string{firstURL})}
+	for _, m := range clus.Members {
+		l2.InitialPeerURLsMap[m.Name] = m.PeerURLs
+	}
+	l2.InitialPeerURLsMap[l2.Name] = l2.PeerURLs
+	t.Logf("launching second learner %s", l2.Name)
+	err = l2.Launch()
+	t.Logf("launch returned: %v", err)
+	defer l2.Terminate(t)
+
+	// If H1c holds, m1 and m2 panic while applying l2's attribute update.
+	time.Sleep(10 * time.Second)
+	t.Logf("no panic within 10s (H1c not reproduced)")
 }
