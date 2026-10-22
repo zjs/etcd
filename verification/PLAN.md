@@ -241,7 +241,8 @@ lastIndex` at election. Changing any of them needs the same scrutiny as a
 protocol change.
 
 Trace validation of upstream `example.ndjson` against the patched spec
-(upstream-mode switches): _pending_.
+(upstream-mode switches): **passes**. Same result as P0: 4,998 states, no
+errors, in 46 min. F1–F3 don't break trace validation.
 
 ### P3 Server-layer model
 
@@ -409,3 +410,4 @@ it.**
     atomic commit are modeled.
   - Code-faithful simulation is clean (82k behaviors).
   - Next: confirm trace validation, then P3.
+- **2026-10-22**: Trace validation of the patched spec passes. Next: P3.
