@@ -226,6 +226,21 @@ guard (unchanged since before PR #21641). Sequence:
 Every remove → remove case found by the enumeration has this shape: the
 first removed member is still running when the stale member evaluates.
 
+### Model counterexamples (P3)
+
+Model counterexamples for H1, H2 and H3 are in `server/` (see the P3
+results in PLAN.md).
+
+**H1 goes further than the original test showed:**
+- **Split-brain configs (model):** with limits 3 vs 1, two promotions
+  reach voter sets with disjoint majorities (`MCH1bWitness`).
+- **Panics (test):** starting the extra learner makes the members with
+  the lower limit panic (`TestH1cExtraLearnerStartPanics`).
+
+**H3 also covers concurrent requests:** two guards pass against the same
+membership before either change commits. The fix has to be a guard
+checked at the leader at append time, not just a fresh view.
+
 ## 6. Notes for P2/P3
 
 - **Spec vs code: new leader.** Spec `BecomeLeader` leaves

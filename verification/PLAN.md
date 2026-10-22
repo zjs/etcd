@@ -55,7 +55,7 @@ minimal reproducing test as evidence before deciding whether to report it.
       must be true; review each against the code.
 - [x] **P2 Raft-layer model**: check membership properties on the existing
       upstream spec; calibrate against a known historical bug.
-- [ ] **P3 Server-layer model**: new spec for etcd's membership state
+- [x] **P3 Server-layer model**: new spec for etcd's membership state
       machine above Raft.
 - [ ] **P4 Model–code conformance**: trace validation and new robustness
       scenarios.
@@ -266,6 +266,53 @@ Candidate invariants (refine in P1):
   change). This is the property the guards intend; check whether races break
   it.
 
+**P3 results (2026-10-22).** Spec: `server/EtcdMembership.tla`; configs:
+`server/*.cfg`; wrapper: `server/MCEtcdMembership.tla`. Raft is abstracted
+to one committed log (P2). Each member has its own view and runs the
+code's guards, raft's one-change rule, and apply-time validation with its
+own `--max-learners`. The model also covers durable state (an
+applied-prefix copy, atomic per bbolt commit; confirmed in
+`batch_tx.go`/`server.go`), crashes, snapshots, and self-removal.
+
+`NoUnsafeChangeInv` (I10) judges each committed change against liveness
+*when its guard ran*, so failures after the check don't count against the
+guard.
+
+| Config | Question | Result |
+|---|---|---|
+| `H1`, `H1-agree` | mixed `--max-learners` | `AgreementInv` violated; also `LearnerBoundInv` (a snapshot imports a view above the receiver's own limit) |
+| `MCH1bWitness` | a: limit 3, others 1; add 3 learners, promote 2 | `NoSplitBrainConfigInv` violated: a ends with voters {a,b,c,y,z}, b and c with {a,b,c}; majorities {a,y,z} and {b,c} are disjoint (35-step TLC-checked behavior) |
+| `H2` | promote guard | violated: same scenario as `TestH2PromoteDeadLearner` |
+| `H3` | stale views | violated: add voter via a; b, not yet applied, accepts removing a |
+| `H2fix` | promote counts reachable voters + live learner | **no violation, exhaustive** (3.36M states) |
+| `H3fix` | proposer must have applied the whole log | still violated: two requests both pass guards before either commits, then raft applies them in sequence. "Fresh view" is not enough |
+| `Hboth` | H2fix + H3fix | still violated (same) |
+| `Hleader` | promote fix + **leader re-checks the guard on its view when appending** | no violation within bounds (22.7M states, depth 14, 15 min) |
+| `Hleader-lag` | same, with lagging liveness observation | violated: a crash not yet noticed by the transport. A limitation of failure detection, not of where the check runs |
+| `Hcrash` | crash recovery and snapshots, uniform limits | no violation within bounds (33.9M states, depth 13): durable state = replay of the log (I3), agreement, removed stay removed |
+
+Follow-up found while modelling H1b (`TestH1cExtraLearnerStartPanics`):
+the model doesn't cover name publishing, and that turned out to matter.
+If the learner accepted only by the high-limit member is started (it
+needs a high limit itself to join), it publishes its name. The other
+members then **panic** (`RaftCluster.UpdateAttributes`: "failed to
+update; member unknown"). Reproduced 3/3. By code reading, the panic
+recurs when the entry is replayed on restart. So H1 likely ends in an
+outage of every member with the lower limit, before any split-brain.
+
+Implications for any fix proposal:
+- **H2:** count only reachable voters, and require the learner to be
+  reachable.
+- **H3:** checking on an up-to-date view is not enough. The guard must
+  run where changes are serialized: at the leader, at append time, under
+  raft's pending-change rule. Alternatively, the request could carry the
+  config version the guard checked, and the leader refuses it if the
+  config has changed.
+- **Lagging failure detection** remains a limitation either way.
+
+Not modeled: transport peer set (I12), liveness/progress properties,
+name publishing (found by test instead), version/downgrade.
+
 ### P4 Model–code conformance
 
 Checks that real etcd processes behave as the models say. A model that passes
@@ -322,6 +369,7 @@ details in `membership-map.md` §5). Run with
 | H1 | Members with different `--max-learners` apply the same learner add differently; raft `ConfState` diverges | `TestH1MixedMaxLearners` | reproduced 3/3 |
 | H2 | Promote guard has no live-connectivity check; promoting a caught-up but dead learner with one voter down loses quorum | `TestH2PromoteDeadLearner` | reproduced 3/3 |
 | H3 | Add guard on a member one change behind accepts a voter add that an up-to-date member refuses; quorum lost | `TestH3StaleViewAddVoter` | reproduced 3/3 |
+| H1c | Starting the learner accepted only by the high-limit member makes the other members panic ("failed to update; member unknown") when it publishes its name | `TestH1cExtraLearnerStartPanics` (needs `VERIFICATION_ALLOW_PANIC=1`) | reproduced 3/3 |
 | H3 (remove) | Remove guard on a member one change behind (still counting the just-removed member as connected) accepts a removal that an up-to-date member refuses; quorum lost | `TestH3StaleViewRemove` | reproduced 3/3 |
 
 P5 for each: search upstream issues and PRs, find affected versions, rate
@@ -411,3 +459,12 @@ it.**
   - Code-faithful simulation is clean (82k behaviors).
   - Next: confirm trace validation, then P3.
 - **2026-10-22**: Trace validation of the patched spec passes. Next: P3.
+- **2026-10-22**: P3 done (bounded).
+  - Server-layer model reproduces H1, H2 and H3; the H1b witness shows
+    mixed learner limits can reach voter sets with disjoint majorities.
+  - New test H1c: the extra learner's start makes the other members
+    panic.
+  - Fix variants: the promote liveness fix closes H2 exhaustively; H3
+    needs the guard checked at the leader at append time.
+  - Next: P4 (traces from real runs), or triage of findings for
+    disclosure (P5).
