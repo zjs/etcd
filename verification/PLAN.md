@@ -38,6 +38,15 @@ minimal reproducing test as evidence before deciding whether to report it.
   the source version.
 - Every claimed finding needs a counterexample trace **and** a reproducing Go
   test against real code before it is called a bug.
+- Go instrumentation lives behind the `with_tla` build tag, in separate files
+  where possible. A default build must stay byte-for-byte unaffected, so the
+  fork can be rebased on upstream with few conflicts.
+
+## Decisions
+
+- **2026-10-22**: Scope includes P4, checking real etcd runs against the
+  models (not only model checking the specs). This requires build-tagged
+  instrumentation of server code in this fork.
 
 ## Status
 
@@ -133,11 +142,41 @@ Candidate invariants (refine in P1):
 
 ### P4 Model–code conformance
 
-- Enable the raft `TraceLogger` (`-tags=with_tla`) in an e2e or robustness
-  build and validate real traces against `Traceetcdraft.tla`. The etcd server
-  does not currently wire up a `TraceLogger`.
+Checks that real etcd processes behave as the models say. A model that passes
+model checking but doesn't match the code proves little.
+
+**P4a: Raft-layer traces from real etcd.**
+- The etcd server does not currently wire up raft's `TraceLogger`. Add a
+  `with_tla` file in `server/etcdserver/` that sets `raft.Config.TraceLogger`
+  and writes NDJSON to a path from an env var; a nop file for default builds.
+- Teach the e2e framework to build with the tag and collect per-member trace
+  files, with the robustness report artifacts.
+- Run membership e2e tests and robustness `MemberReplace`, then validate with
+  upstream `Traceetcdraft.tla` / `validate.sh`.
+- Known upstream limits to plan around (from `tla/README.md`): the merge
+  sorts on a timestamp field, so members must run on one machine; the
+  spec assumes atomic persistence, so crash traces may give false alarms;
+  validation slows sharply past a few thousand events per file, so keep
+  runs short and QPS low.
+
+**P4b: Server-layer traces.**
+- Instrument the membership paths from the P1 map (guard decisions,
+  propose, apply/validate, each store write, recover) under the same tag,
+  using the variable names of `EtcdMembership.tla`.
+- Write `TraceEtcdMembership.tla` mapping events to spec actions, following
+  the upstream `Traceetcdraft.tla` pattern.
+- Ordering across members: membership events are applied in log order, so
+  key events by (term, index) where possible and use timestamps only for
+  proposal-side events.
+
+**P4c: Exercise more behavior.**
 - Add robustness failpoints for learner add → promote, and learner removal,
-  run with existing fault injection.
+  run with existing fault injection (kill, blackhole, gofail).
+- A run that never reaches a code path gives no evidence about it. Record
+  which spec actions each trace set covers, and add scenarios until every
+  membership action is covered.
+
+**P4d: Counterexamples to tests.**
 - For each P3 counterexample, write an integration test that drives the same
   interleaving against real code (gofail failpoints where needed).
 
@@ -155,4 +194,4 @@ _None yet._
 - **2026-10-22**: Surveyed existing work: upstream raft TLA+ spec and trace
   validation, robustness tests (porcupine), Jepsen 3.4.3, Antithesis,
   ModelFuzz, SysMoBench. Mapped server membership code paths (table above).
-  Wrote this plan. Next: P0.
+  Wrote this plan. Decided to include P4 (real-run checking). Next: P0.
