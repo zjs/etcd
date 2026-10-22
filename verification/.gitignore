@@ -1,1 +1,5 @@
 .cache/
+# TLC trace-exploration output
+*_TTrace_*.tla
+*_TTrace_*.bin
+states/
