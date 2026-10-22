@@ -50,7 +50,7 @@ minimal reproducing test as evidence before deciding whether to report it.
 
 ## Status
 
-- [ ] **P0 Tooling**: run TLC in a cloud session, pinned versions, one script.
+- [x] **P0 Tooling**: run TLC in a cloud session, pinned versions, one script.
 - [ ] **P1 Code map and informal invariants**: write down, in prose, what
       must be true; review each against the code.
 - [ ] **P2 Raft-layer model**: check membership properties on the existing
@@ -91,8 +91,10 @@ minimal reproducing test as evidence before deciding whether to report it.
   random behaviors (mean length 85), 9.4M states, 6 min 37 s, no
   violations (seed `8692819047272779617`).
 - **Trace validation** of upstream `example.ndjson` (4,888 lines) needs
-  `-workers 1` (the spec asserts it). It slows as it goes: about 3,400
-  events in 15 min. Result: _pending_.
+  `-workers 1` (the spec asserts it). **Passed**: 4,998 states, depth
+  4,998, no errors, in 45 min 12 s. It slows as it goes (about 3,400 events
+  in the first 15 min, then about 100/min), so cost grows faster than
+  linearly with trace length.
 
 Consequences for later phases:
 
@@ -232,4 +234,6 @@ _None yet._
 - **2026-10-22**: Surveyed existing work: upstream raft TLA+ spec and trace
   validation, robustness tests (porcupine), Jepsen 3.4.3, Antithesis,
   ModelFuzz, SysMoBench. Mapped server membership code paths (table above).
-  Wrote this plan. Decided to include P4 (real-run checking). Next: P0.
+  Wrote this plan. Decided to include P4 (real-run checking).
+- **2026-10-22**: P0 done: pinned TLC runner, vendored upstream spec,
+  baseline runs (see P0 results). Next: P1 code map.
