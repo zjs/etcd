@@ -126,20 +126,26 @@ there; **H#** = threatened by a hypothesis below.
 
 | # | Invariant | Status |
 |---|---|---|
-| I1 | Every member makes the same accept/reject decision for each committed conf-change entry | code, if configs match; **H1** |
+| I1 | Every member makes the same accept/reject decision for each committed conf-change entry | code, if configs match; **violated with mixed `--max-learners` (H1, reproduced)** |
 | I2 | After applying index k, each member's raft config equals {voters = non-learner members, learners = learner members} from its backend | P3 |
 | I3 | After restart, raft's config (rebuilt from backend) equals the config from applying the log up to the consistent index | code; P3 with crashes |
 | I4 | A conf-change entry's member write, consistent index and `confState` are durable together or not at all | P3 (batch-commit timing) |
 | I5 | A removed ID never re-enters `members` and its messages are dropped | code |
 | I6 | Peer URLs are unique among members | code (add/update validation) |
-| I7 | Learners ≤ max-learners | code, per member; **H1** |
+| I7 | Learners ≤ max-learners | code, per member; cluster-wide only if flags match (H1) |
 | I8 | At most one conf change between a leader's applied index and its log end | code (raft); P2 |
 | I9 | Learners never vote and never count towards commit | P2 |
-| I10 | With StrictReconfigCheck on, an accepted voter add/promote/remove leaves a quorum of reachable voters in the new configuration, assuming no further failures | **H2, H3**; P3 |
+| I10 | With StrictReconfigCheck on, an accepted voter add/promote/remove leaves a quorum of reachable voters in the new configuration, assuming no further failures | **violated (H2, H3 reproduced)**; P3 |
 | I11 | `configure` reports success only after the change applied locally; a timeout may mean applied or not, and retries are detected | code |
 | I12 | After any apply, snapshot or replay, transport peers = members \ {self} | P3 |
 
-## 5. Hypotheses (unconfirmed: each needs a model trace and a Go test)
+## 5. Hypotheses
+
+All three were reproduced on 2026-10-22 against real in-process clusters
+(`tests/integration/verification`, build tag `verification`). Each test
+reproduced its hypothesis 3 out of 3 times. They are not yet confirmed as
+bugs: P5 still needs an upstream search, affected versions and a severity
+call. Model traces come in P3.
 
 **H1. Different `--max-learners` values can make members disagree on
 membership.** Learner-add validation uses the local flag. Example: one
@@ -148,8 +154,14 @@ accepted on one member and rejected (`NodeId = None`) on the others. Their
 backends and raft configs would diverge, violating I1/I2. A later promote
 of that learner would make the voter sets differ. It needs operator
 misconfiguration; bootstrap only checks the joining member's own flag
-against current membership. *Next:* integration test with mixed flags;
-search upstream issues before calling it new.
+against current membership.
+
+*Reproduced* by `TestH1MixedMaxLearners`. 3 voters with `--max-learners=1`;
+member 0 restarted with `2`; two learner adds. Member 0 records 2 learners
+in its member list and in its persisted raft `ConfState`; members 1 and 2
+record 1. So the raft configurations differ, not just the metadata. Open:
+what a later promote of the extra learner does (voter sets would differ);
+model in P3.
 
 **H2. Promote does not check that the learner or the voters are currently
 reachable.** `mayPromoteMember` uses `isLearnerReady` (the leader's `Match`
@@ -159,12 +171,47 @@ learner as started). Example: 3 voters with 1 down, plus a caught-up
 learner that has just died. Promote passes both checks and commits under
 the old config (2 of 3). The new config has 4 voters needing 3, with only
 2 alive, so the cluster loses quorum. Add and remove have live-connectivity
-checks; promote does not. *Next:* model in P3; e2e test.
+checks; promote does not.
+
+*Reproduced* by `TestH2PromoteDeadLearner` (strict reconfig check on).
+Sequence:
+1. Add a learner and let it catch up.
+2. Stop one non-leader voter, then the learner.
+3. A control write succeeds (2 of 3 voters alive).
+4. `MemberPromote` succeeds.
+5. The leader logs "stepped down to follower since quorum is not active"
+   and writes time out for 15 s.
+6. Restarting the learner restores writes.
 
 **H3. Guards on stale views.** Add and remove guards don't wait for the
 local applied index. A member that hasn't applied the previous change
-evaluates the next one against the old membership. Whether this can break
-I10 needs the P3 model.
+evaluates the next one against the old membership.
+
+*Found by enumeration:* `verification/explore/guard_enum.py` compares the
+guards on an up-to-date view and on a view one change behind, for 1–5
+voters, 0–1 learners and two changes each. It finds 2,354 cases where only
+the stale view accepts a change that leaves no reachable quorum, with the
+stale member different from the first change's proposer. Every case starts
+from an **even** voter count (2 or 4); none from 1, 3 or 5.
+
+*Reproduced* by `TestH3StaleViewAddVoter` (strict reconfig check on).
+Sequence:
+1. 4 voters, one stopped.
+2. Make a follower lag. The test holds a read lock on its backend and
+   starts a commit, so its apply blocks in `ValidateConfigurationChange`
+   before the in-memory view updates.
+3. Add voter n0 (not started) via the leader: accepted. The leader's view
+   shows 5 voters; the lagging follower's shows 4.
+4. Control: adding n1 via the leader is refused ("unhealthy cluster").
+5. Adding n1 via the lagging follower is accepted. The lag is released
+   about 30 ms later.
+6. The leader's view shows 6 voters with 3 alive (quorum 4); writes time
+   out for 15 s.
+
+The lag is artificial, but real lags of this length happen routinely
+(apply runs behind commit). A client with several endpoints spreads
+requests across members, so consecutive member commands can reach
+different members.
 
 ## 6. Notes for P2/P3
 

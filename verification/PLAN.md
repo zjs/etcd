@@ -231,12 +231,18 @@ test, affected versions, and severity. Decide disclosure per finding.
 
 ## Findings
 
-_None confirmed yet._ Open hypotheses (details in `membership-map.md` §5):
+Reproduced on real in-process clusters (not yet triaged for disclosure;
+details in `membership-map.md` §5). Run with
+`cd tests && go test -tags verification ./integration/verification/ -v`.
 
-- **H1**: members with different `--max-learners` may disagree on membership.
-- **H2**: the promote guard has no live-connectivity check; promoting a
-  caught-up but dead learner may lose quorum.
-- **H3**: add/remove guards may run on a stale membership view.
+| # | Summary | Test | Result |
+|---|---|---|---|
+| H1 | Members with different `--max-learners` apply the same learner add differently; raft `ConfState` diverges | `TestH1MixedMaxLearners` | reproduced 3/3 |
+| H2 | Promote guard has no live-connectivity check; promoting a caught-up but dead learner with one voter down loses quorum | `TestH2PromoteDeadLearner` | reproduced 3/3 |
+| H3 | Add guard on a member one change behind accepts a voter add that an up-to-date member refuses; quorum lost | `TestH3StaleViewAddVoter` | reproduced 3/3 |
+
+P5 for each: search upstream issues and PRs, find affected versions, rate
+severity, then decide on disclosure.
 
 ## Session log
 
@@ -250,3 +256,6 @@ _None confirmed yet._ Open hypotheses (details in `membership-map.md` §5):
   runtime membership path; backend `meta/confState` is written but never
   read. Three hypotheses (H1–H3) to test. Next: P2, plus early Go repro
   tests for H1/H2 since they are cheap.
+- **2026-10-22**: Reproduced H1, H2 and H3 with integration tests (build
+  tag `verification`). The guard enumeration shows stale-view gaps only from
+  even voter counts. Next: P2.
