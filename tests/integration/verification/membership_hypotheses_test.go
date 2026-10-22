@@ -317,3 +317,91 @@ func votersIn(m *integration.Member) int {
 	}
 	return n
 }
+
+// freezeApply makes m's apply loop block at its next backend read, leaving
+// its in-memory membership view stale while its raft transport stays up.
+// It holds a read lock on the backend and starts a commit, which waits for
+// the write lock; new readers then queue behind the waiting writer. The
+// returned func releases it (safe to call more than once).
+func freezeApply(m *integration.Member) (release func()) {
+	be := m.Server.Backend()
+	rtx := be.ReadTx()
+	rtx.RLock()
+	go be.ForceCommit()
+	time.Sleep(50 * time.Millisecond)
+	done := false
+	return func() {
+		if !done {
+			done = true
+			rtx.RUnlock()
+		}
+	}
+}
+
+// TestH3StaleViewRemove is the remove-based form of H3. It needs only the
+// remove guard, which is unchanged since before PR #21641, so it also
+// applies to releases older than v3.6.11 / v3.5.30.
+//
+//	4 voters A (down), B, L (leader), S.
+//	op1: remove B via L -> 3 voters {A, L, S}, 2 alive, quorum 2: ok.
+//	op2: remove S via S, while S has not applied op1 and B (removed, but
+//	     not yet applied its own removal) is still connected to S.
+//	     Fresh view on L: active {L,S}=2, 2-1 < quorum(2)=2 -> rejected.
+//	     Stale view on S: active {S,B,L}=3, 3-1 >= quorum(3)=2 -> accepted.
+//	     Result: 2 voters {A, L}, 1 alive: no quorum.
+func TestH3StaleViewRemove(t *testing.T) {
+	integration.BeforeTest(t)
+
+	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 4}) // strict reconfig check on
+	defer clus.Terminate(t)
+
+	l := clus.WaitLeader(t)
+	a, b, s := (l+1)%4, (l+2)%4, (l+3)%4
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Peers must be connected for HealthInterval (5s) for the guard.
+	time.Sleep(6 * time.Second)
+	clus.Members[a].Stop(t)
+	time.Sleep(2 * time.Second)
+
+	bID := uint64(clus.Members[b].Server.MemberID())
+	sID := uint64(clus.Members[s].Server.MemberID())
+
+	releaseB := freezeApply(clus.Members[b])
+	defer releaseB()
+	releaseS := freezeApply(clus.Members[s])
+	defer releaseS()
+
+	_, err := clus.Client(l).MemberRemove(ctx, bID)
+	require.NoError(t, err, "op1 (remove B via leader) failed")
+	t.Logf("voters in view: leader=%d stale member=%d", votersIn(clus.Members[l]), votersIn(clus.Members[s]))
+
+	// Control: the same removal evaluated on the up-to-date leader.
+	_, ctrlErr := clus.Client(l).MemberRemove(ctx, sID)
+	t.Logf("control (remove S via up-to-date leader): err=%v", ctrlErr)
+	require.Error(t, ctrlErr, "control: up-to-date guard accepted the removal")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := clus.Client(s).MemberRemove(ctx, sID)
+		done <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	releaseS()
+	releaseB()
+
+	err = <-done
+	t.Logf("op2 (remove S via S, stale view): err=%v", err)
+	if err != nil {
+		t.Logf("H3 (remove) not reproduced: stale-view request was rejected")
+		return
+	}
+	putCtx, putCancel := context.WithTimeout(t.Context(), 15*time.Second)
+	_, err = clus.Client(l).Put(putCtx, "after", "v")
+	putCancel()
+	t.Logf("put after op2: err=%v; voters in leader view: %d", err, votersIn(clus.Members[l]))
+	if err != nil {
+		t.Errorf("H3 reproduced (remove): stale-view guard accepted a removal that left no quorum (put: %v)", err)
+	}
+}

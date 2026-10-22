@@ -213,6 +213,19 @@ The lag is artificial, but real lags of this length happen routinely
 requests across members, so consecutive member commands can reach
 different members.
 
+*Also reproduced* by `TestH3StaleViewRemove`, which uses only the remove
+guard (unchanged since before PR #21641). Sequence:
+1. 4 voters A (down), B, L (leader), S; freeze the apply loops of B and S.
+2. Remove B via L: accepted. L's view shows 3 voters; S's view shows 4.
+3. Control: removing S via L is refused ("unhealthy cluster").
+4. Removing S via S is accepted. S's stale view counts B as an active
+   voter, because B hasn't applied its own removal yet and is still
+   connected.
+5. L's view shows 2 voters with 1 alive; writes time out.
+
+Every remove → remove case found by the enumeration has this shape: the
+first removed member is still running when the stale member evaluates.
+
 ## 6. Notes for P2/P3
 
 - **Spec vs code: new leader.** Spec `BecomeLeader` leaves

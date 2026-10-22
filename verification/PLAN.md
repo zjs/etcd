@@ -240,6 +240,7 @@ details in `membership-map.md` §5). Run with
 | H1 | Members with different `--max-learners` apply the same learner add differently; raft `ConfState` diverges | `TestH1MixedMaxLearners` | reproduced 3/3 |
 | H2 | Promote guard has no live-connectivity check; promoting a caught-up but dead learner with one voter down loses quorum | `TestH2PromoteDeadLearner` | reproduced 3/3 |
 | H3 | Add guard on a member one change behind accepts a voter add that an up-to-date member refuses; quorum lost | `TestH3StaleViewAddVoter` | reproduced 3/3 |
+| H3 (remove) | Remove guard on a member one change behind (still counting the just-removed member as connected) accepts a removal that an up-to-date member refuses; quorum lost | `TestH3StaleViewRemove` | reproduced 3/3 |
 
 P5 for each: search upstream issues and PRs, find affected versions, rate
 severity, then decide on disclosure.
@@ -287,8 +288,15 @@ it.**
   and main.**
 - Rerunning `explore/guard_enum.py` with the old add guard still finds
   1,514 stale-view cases (e.g. remove → remove on 4 voters), so **H3 as a
-  class predates #21641.** Follow-up: add a remove → remove reproduction
-  test that applies to older versions.
+  class predates #21641.**
+- `TestH3StaleViewRemove` reproduces remove → remove on main (3/3). Every
+  remove → remove case needs the first removed member still running when
+  the stale member evaluates. The test freezes that member's apply so it
+  hasn't processed its own removal yet.
+- The remove guard is identical in v3.6.10 and main. v3.5.29 differs only
+  cosmetically (error package names, member lookup). So this variant
+  applies to releases before v3.6.11 / v3.5.30 by code equivalence. The
+  test was not run against them.
 - Adjacent, not the same: k0sproject/k0s#8530 (remove guard counts a
   partitioned peer as connected) and canonical/k8sd#159.
 
@@ -311,3 +319,5 @@ it.**
   reported; H1's misconfiguration risk was noted in PR #13377 review. H3's
   add-voter variant is enabled by PR #21641 (v3.6.11/v3.5.30); the
   remove-based variants predate it. Next: P2.
+- **2026-10-22**: Added `TestH3StaleViewRemove` (reproduced 3/3);
+  remove-guard code is equivalent in v3.6.10 and v3.5.29. Next: P2.
