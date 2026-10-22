@@ -390,7 +390,7 @@ seconds. Negative controls fail as they should: a bumped term at
    `Traceetcdraft.tla`) checks the restored state at the following
    `BecomeFollower` instead.
 
-Upstream example trace re-validated with the T1 change: _pending_.
+Upstream example trace re-validated with the T1 change: **passes** (4,998 states, 46 min), same as before.
 
 Remaining in P4: P4b (server-layer traces vs `EtcdMembership.tla`) and P4c
 (robustness scenarios for learners). Trace scenarios with faults beyond
