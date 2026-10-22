@@ -29,11 +29,12 @@ CONSTANTS
     \* Variants (FALSE = current code):
     FixStaleView,           \* proposer must have applied the whole log first
     FixPromoteLiveness,     \* promote guard counts only reachable voters + live learner
+    FixGuardAtCommit,       \* leader re-runs the guard on its view when it appends
     ConnLag                 \* guards see liveness through a lagging observation
 
 ASSUME InitVoters \subseteq Server /\ InitVoters # {}
 ASSUME MaxLearners \in [Server -> Nat]
-ASSUME \A b \in {StrictReconfigCheck, FixStaleView, FixPromoteLiveness, ConnLag} : b \in BOOLEAN
+ASSUME \A b \in {StrictReconfigCheck, FixStaleView, FixPromoteLiveness, FixGuardAtCommit, ConnLag} : b \in BOOLEAN
 
 VARIABLES
     log,        \* Seq of committed ops [kind, id]
@@ -167,6 +168,9 @@ Request(op, p) ==
 Commit(pr, l) ==
     /\ CanLead(l)
     /\ applied[l] = Len(log)
+    \* Variant: the leader re-checks the guard on its own (current) view at
+    \* append time, where raft's pending rule serializes changes.
+    /\ (FixGuardAtCommit /\ StrictReconfigCheck) => Guard(pr.op, l)
     /\ log' = Append(log, pr.op)
     /\ props' = props \ {pr}
     \* The guard's contract: judged against liveness when it ran (later
@@ -174,9 +178,11 @@ Commit(pr, l) ==
     \* config from a reachable quorum to none. The config here is the one
     \* the change actually applies to, which differs from the proposer's
     \* view if that view was stale.
-    /\ unsafe' = (unsafe \/ (/\ StrictReconfigCheck
-                              /\ AvailWith(mem[l], pr.up)
-                              /\ ~AvailWith(ApplyOp(pr.op, mem[l], l), pr.up)))
+    \* (With FixGuardAtCommit the check runs now, so judge against now.)
+    /\ LET up == IF FixGuardAtCommit THEN {s \in Server : alive[s]} ELSE pr.up
+       IN unsafe' = (unsafe \/ (/\ StrictReconfigCheck
+                                /\ AvailWith(mem[l], up)
+                                /\ ~AvailWith(ApplyOp(pr.op, mem[l], l), up)))
     /\ UNCHANGED <<applied, mem, dur, alive, started, seen, caughtUp, faults>>
 
 \* The request times out (or raft dropped it as a second pending change).
