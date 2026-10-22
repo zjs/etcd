@@ -30,6 +30,13 @@ RcvAck(src, dst) ==
     \E m \in DOMAIN messages : /\ m.mtype = AppendEntriesRequest /\ m.msource = src /\ m.mdest = dst
                                /\ Receive(m) /\ messages' # messages
 
+\* With AtomicAppendCommit the append step already commits and replies, so
+\* the follow-up step has nothing to do.
+RcvAckOpt(src, dst) ==
+    IF \E m \in DOMAIN messages : m.mtype = AppendEntriesRequest /\ m.msource = src /\ m.mdest = dst
+    THEN RcvAck(src, dst)
+    ELSE UNCHANGED vars
+
 Script ==
     CASE step = 0  -> Timeout(s1)
       [] step = 1  -> RequestVote(s1, s1)
@@ -47,7 +54,7 @@ Script ==
       [] step = 13 -> Ready(s1)
       [] step = 14 -> Rcv(AppendEntriesResponse, s1, s1)
       [] step = 15 -> RcvAppend(s1, s2)   \* append idx 4
-      [] step = 16 -> RcvAck(s1, s2)   \* commit-update + reply
+      [] step = 16 -> RcvAckOpt(s1, s2)   \* commit-update + reply
       [] step = 17 -> Ready(s2)
       [] step = 18 -> Rcv(AppendEntriesResponse, s2, s1)
       [] step = 19 -> AdvanceCommitIndex(s1)   \* commit 4
@@ -60,17 +67,17 @@ Script ==
       [] step = 26 -> Ready(s1)
       [] step = 27 -> Rcv(AppendEntriesResponse, s1, s1)
       [] step = 28 -> RcvAppend(s1, s2)   \* append idx 5
-      [] step = 29 -> RcvAck(s1, s2)
+      [] step = 29 -> RcvAckOpt(s1, s2)
       [] step = 30 -> Ready(s2)
       [] step = 31 -> Rcv(AppendEntriesRequest, s1, s4)   \* s4: UpdateTerm
       [] step = 32 -> RcvAppend(s1, s4)
-      [] step = 33 -> RcvAck(s1, s4)
+      [] step = 33 -> RcvAckOpt(s1, s4)
       [] step = 34 -> Ready(s4)
       [] step = 35 -> Rcv(AppendEntriesResponse, s4, s1)   \* match 4
       [] step = 36 -> AppendEntries(s1, s4, <<5, 6>>)   \* s4 gets 5
       [] step = 37 -> Ready(s1)
       [] step = 38 -> RcvAppend(s1, s4)
-      [] step = 39 -> RcvAck(s1, s4)
+      [] step = 39 -> RcvAckOpt(s1, s4)
       [] step = 40 -> Ready(s4)
       [] step = 41 -> Rcv(AppendEntriesRequest, s1, s3)   \* s3: UpdateTerm
       [] step = 42 -> RcvAppend(s1, s3)   \* s3 appends 4..5 (no separate commit step)
@@ -80,7 +87,7 @@ Script ==
       [] step = 46 -> ApplySimpleConfChange(s1)   \* s1 on C2
       [] step = 47 -> Heartbeat(s1, s2)
       [] step = 48 -> Ready(s1)
-      [] step = 49 -> RcvAck(s1, s2)   \* heartbeat: s2 commit 5
+      [] step = 49 -> RcvAckOpt(s1, s2)   \* heartbeat: s2 commit 5
       [] step = 50 -> ApplySimpleConfChange(s2)   \* s2 on C2
       [] step = 51 -> Timeout(s3)   \* D: s3 campaigns on C0
       [] step = 52 -> Timeout(s2)   \* s2 campaigns on C2

@@ -650,13 +650,24 @@ NoConflictAppendEntriesRequest(i, index, m) ==
     /\ index > commitIndex[i]
     /\ HasNoConflict(i, index, m.mentries)
     /\ log' = [log EXCEPT ![i] = @ \o SubSeq(m.mentries, Len(@)-index+2, Len(m.mentries))]
-    \* FORK(F6): the code learns the commit index in the same step as it
-    \* appends (raft.go handleAppendEntries -> raftLog.maybeAppend:
-    \* commitTo(min(m.Commit, lastnewi))). Upstream does it in a later step.
+    \* FORK(F6): the code appends, learns the commit index and replies in one
+    \* step (raft.go handleAppendEntries -> raftLog.maybeAppend:
+    \* commitTo(min(m.Commit, lastnewi)), then MsgAppResp{Index: lastnewi}).
+    \* Upstream appends here and commits + replies in a later step
+    \* (AppendEntriesAlreadyDone), which can also reply with the commit
+    \* index instead of the last new index.
     /\ IF AtomicAppendCommit
-       THEN CommitTo(i, Min({m.mcommitIndex, m.mprevLogIndex + Len(m.mentries)}))
-       ELSE UNCHANGED commitIndex
-    /\ UNCHANGED <<messageVars, serverVars, durableState>>
+       THEN /\ CommitTo(i, Min({m.mcommitIndex, m.mprevLogIndex + Len(m.mentries)}))
+            /\ Reply([mtype           |-> AppendEntriesResponse,
+                      msubtype        |-> m.msubtype,
+                      mterm           |-> currentTerm[i],
+                      msuccess        |-> TRUE,
+                      mmatchIndex     |-> m.mprevLogIndex + Len(m.mentries),
+                      msource         |-> i,
+                      mdest           |-> m.msource],
+                      m)
+            /\ UNCHANGED <<serverVars, durableState>>
+       ELSE UNCHANGED <<messageVars, serverVars, commitIndex, durableState>>
 
 \* @type: (Int, Int, Bool, AEREQT) => Bool;
 AcceptAppendEntriesRequest(i, j, logOk, m) ==

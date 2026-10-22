@@ -33,7 +33,8 @@ a comment.
 | F3 | `etcdraft.tla` `BecomeLeader` | Count only voters' grants | Code: `tracker.TallyVotes` skips learners. Upstream needed *every* grant to come from a voter, so one stray grant blocked an election (an under-approximation) |
 | F4 | `etcdraft.tla` `Timeout` | New constant `CampaignRequiresAppliedConfig`: when TRUE, a node with committed but unapplied config entries can't campaign | Code: `raft.go` `hup` → `hasUnappliedConfChanges`. Set FALSE in all upstream configs to keep upstream behavior |
 | F5 | `etcdraft.tla` `BecomeLeader`, `CanProposeConf`, `ApplySimpleConfChange` | New constant `LeaderPendingAtElection`: when TRUE, a new leader sets the pending marker to its last index, and a config change is allowed only if marker ≤ commit and no committed config is unapplied. Under F5 the marker is never cleared by `ApplySimpleConfChange` | Code: `raft.go` `becomeLeader` sets `pendingConfIndex = lastIndex`; `stepLeader` refuses while `pendingConfIndex > applied`. Upstream clears the marker when `marker >= k` (reversed); re-applying an old committed config is always enabled, so the one-change-at-a-time rule isn't enforced |
-| F6 | `etcdraft.tla` `NoConflictAppendEntriesRequest` | New constant `AtomicAppendCommit`: when TRUE, a follower learns the commit index in the same step as it appends | Code: `raft.go` `handleAppendEntries` → `raftLog.maybeAppend` → `commitTo(min(m.Commit, lastnewi))`. Upstream updates the commit index in a later step |
+| F6 | `etcdraft.tla` `NoConflictAppendEntriesRequest` | New constant `AtomicAppendCommit`: when TRUE, a follower appends, learns the commit index and replies (match = last new index) in one step | Code: `raft.go` `handleAppendEntries` → `raftLog.maybeAppend` → `commitTo(min(m.Commit, lastnewi))`, then `MsgAppResp{Index: lastnewi}`. Upstream commits and replies in a later step. A first version (commit only) was caught by a real trace in P4 |
+| T1 | `Traceetcdraft.tla` `RestartIfLogged`, `RestartBecomeFollowerIfLogged` | A restart's `InitState` line is not validated; the restored state is checked at the next `BecomeFollower` | raft logs `InitState` before `loadState` (raft.go `newRaft`), so on restart it shows zeros. Upstream could not validate any real restart |
 | — | `etcdraft.tla` | New invariants `LearnersVotersDisjointInv`, `ConfigEntryDisjointInv`, `KnowsPrevConfigCommittedInv`, `AtMostOneUncommittedConfigInv` | P2 membership properties |
 | — | `*.cfg` | `CampaignRequiresAppliedConfig`, `AtomicAppendCommit`, `LeaderPendingAtElection` set to FALSE in the upstream configs | Required by F4–F6 |
 
@@ -64,3 +65,4 @@ Files added in this fork (not from upstream):
   are free). Too large for exhaustive search at the depth needed.
 - `MCwitness.tla`, `MCwitness.cfg`: a 71-step hand-written behavior, checked
   by TLC, that elects two leaders in one term when F4 or F6 is off.
+- `Traceetcdraft-faithful.cfg`: trace validation with F4–F6 on (P4).

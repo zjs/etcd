@@ -171,9 +171,11 @@ type ClusterConfig struct {
 
 	WatchProgressNotifyInterval time.Duration
 	MaxLearners                 int
-	DisableStrictReconfigCheck  bool
-	CorruptCheckTime            time.Duration
-	Metrics                     string
+	// TickMs overrides the raft tick (default framecfg.TickDuration).
+	TickMs                     uint
+	DisableStrictReconfigCheck bool
+	CorruptCheckTime           time.Duration
+	Metrics                    string
 }
 
 type Cluster struct {
@@ -284,6 +286,7 @@ func (c *Cluster) MustNewMember(t testutil.TB) *Member {
 			LeaseCheckpointPersist:      c.Cfg.LeaseCheckpointPersist,
 			WatchProgressNotifyInterval: c.Cfg.WatchProgressNotifyInterval,
 			MaxLearners:                 c.Cfg.MaxLearners,
+			TickMs:                      c.Cfg.TickMs,
 			DisableStrictReconfigCheck:  c.Cfg.DisableStrictReconfigCheck,
 			CorruptCheckTime:            c.Cfg.CorruptCheckTime,
 			Metrics:                     c.Cfg.Metrics,
@@ -614,9 +617,11 @@ type MemberConfig struct {
 	LeaseCheckpointPersist      bool
 	WatchProgressNotifyInterval time.Duration
 	MaxLearners                 int
-	DisableStrictReconfigCheck  bool
-	CorruptCheckTime            time.Duration
-	Metrics                     string
+	// TickMs overrides the raft tick (default framecfg.TickDuration).
+	TickMs                     uint
+	DisableStrictReconfigCheck bool
+	CorruptCheckTime           time.Duration
+	Metrics                    string
 }
 
 // MustNewMember return an inited member with the given name. If peerTLS is
@@ -667,6 +672,9 @@ func MustNewMember(t testutil.TB, mcfg MemberConfig) *Member {
 	m.ElectionTicks = ElectionTicks
 	m.InitialElectionTickAdvance = true
 	m.TickMs = uint(framecfg.TickDuration / time.Millisecond)
+	if mcfg.TickMs != 0 {
+		m.TickMs = mcfg.TickMs
+	}
 	m.PreVote = true
 	m.QuotaBackendBytes = mcfg.QuotaBackendBytes
 	m.BackendBatchInterval = mcfg.BackendBatchInterval

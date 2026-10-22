@@ -562,7 +562,7 @@ func bootstrapRaftFromWAL(cfg config.ServerConfig, bwal *bootstrappedWAL) *boots
 }
 
 func raftConfig(cfg config.ServerConfig, id uint64, s *raft.MemoryStorage) *raft.Config {
-	return &raft.Config{
+	c := &raft.Config{
 		ID:              id,
 		ElectionTick:    cfg.ElectionTicks,
 		HeartbeatTick:   1,
@@ -573,6 +573,8 @@ func raftConfig(cfg config.ServerConfig, id uint64, s *raft.MemoryStorage) *raft
 		PreVote:         cfg.PreVote,
 		Logger:          NewRaftLoggerZap(cfg.Logger.Named("raft")),
 	}
+	setRaftTraceLogger(c, cfg.Logger)
+	return c
 }
 
 func (b *bootstrappedRaft) newRaftNode(ss *snap.Snapshotter, wal *wal.WAL, cl *membership.RaftCluster) *raftNode {

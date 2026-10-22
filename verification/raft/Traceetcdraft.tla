@@ -358,10 +358,34 @@ ReadyIfLogged(i) ==
     /\ LoglineIsNodeEvent("Ready", i)
     /\ Ready(i)
 
+\* FORK(T1): raft.go newRaft logs InitState *before* loadState, so on a
+\* restart the InitState line shows term 0, commit 0 and an empty config.
+\* Upstream validated the restart against it, which no real restart can
+\* match. Here the restart is not validated at InitState; the restored
+\* state is checked at the BecomeFollower line that newRaft logs after
+\* loading it (RestartBecomeFollowerIfLogged).
 RestartIfLogged(i) ==
     /\ LoglineIsNodeEvent("InitState", i)
     /\ Restart(i)
-    /\ ValidatePostStates(i)
+
+\* FORK(T1): previous line for node i, before the current one.
+PrevNodeLine(i) ==
+    LET k == SelectLastInSubSeq(TraceLog, 1, l-1, LAMBDA x: x.event.nid = i)
+    IN IF k > 0 THEN TraceLog[k] ELSE logline
+
+\* FORK(T1): the BecomeFollower that newRaft logs right after a restart
+\* (preceded by InitState and the restored-config ApplyConfChange). The
+\* spec's Restart already restored the state; check it matches.
+RestartBecomeFollowerIfLogged(i) ==
+    /\ LoglineIsNodeEvent("BecomeFollower", i)
+    /\ PrevNodeLine(i).event.name \in {"InitState", "ApplyConfChange"}
+    /\ state[i] = Follower
+    /\ currentTerm[i] = logline.event.state.term
+    /\ votedFor[i] = logline.event.state.vote
+    /\ Len(log[i]) = logline.event.log
+    /\ commitIndex[i] = logline.event.state.commit
+    /\ config[i].jointConfig = ConfFromLog(logline)
+    /\ UNCHANGED <<vars>>
 
 LoglineIsBecomeFollowerInUpdateTermOrReturnToFollower ==
     /\ LoglineIsEvent("BecomeFollower")
@@ -426,6 +450,8 @@ TraceNextNonReceiveActions ==
           /\ \E i \in Server: RestartIfLogged(i)
        \/ /\ LoglineIsEvent("BecomeFollower")
           /\ \E i \in Server: StepDownToFollowerIfLogged(i)
+       \/ /\ LoglineIsEvent("BecomeFollower")
+          /\ \E i \in Server: RestartBecomeFollowerIfLogged(i)
        \/ SkipUnusedLogline
     /\ StepToNextTrace
     

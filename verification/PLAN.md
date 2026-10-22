@@ -39,8 +39,9 @@ minimal reproducing test as evidence before deciding whether to report it.
 - Every claimed finding needs a counterexample trace **and** a reproducing Go
   test against real code before it is called a bug.
 - Go instrumentation lives behind the `with_tla` build tag, in separate files
-  where possible. A default build must stay byte-for-byte unaffected, so the
-  fork can be rebased on upstream with few conflicts.
+  where possible. The default build's behavior must be unchanged, so the
+  fork can be rebased on upstream with few conflicts. The only untagged
+  production change is a no-op hook call in `bootstrap.go` `raftConfig`.
 
 ## Decisions
 
@@ -353,6 +354,48 @@ model checking but doesn't match the code proves little.
 - For each P3 counterexample, write an integration test that drives the same
   interleaving against real code (gofail failpoints where needed).
 
+**P4a results (2026-10-22).**
+
+*Instrumentation:*
+- `server/etcdserver/raft_trace_tla.go` (tag `with_tla`) sets
+  `raft.Config.TraceLogger` when `ETCD_TLA_TRACE_FILE` is set. All
+  members in a process append to one file through a mutex, so file order
+  is a total order consistent with send-before-receive. The no-op twin is
+  `raft_trace.go`.
+- The test framework gained `ClusterConfig.TickMs` (test-only) to keep
+  traces short.
+
+*Scenarios* (`tests/integration/verification/raft_trace_test.go`, tags
+`verification,with_tla`): basic, learner add/start/promote, remove a
+follower, remove the leader, restart a follower. Each produces 210–431
+events.
+
+*Validation:* `tools/validate-trace.sh [-c cfg] traces...`. All 5 traces
+pass with upstream settings (`Traceetcdraft.cfg`) and with the
+code-faithful switches (`Traceetcdraft-faithful.cfg`, F4–F6 on). Each takes
+seconds. Negative controls fail as they should: a bumped term at
+`BecomeLeader`, and a wrong commit index after restart.
+
+*What real traces caught:*
+1. **My F6 was wrong.** The learner trace failed with F6 on. The spec's
+   commit-update step ran after F6 had already raised the commit index, so
+   it took the "message is stale" branch and replied with match = commit
+   (10) where etcd replied with the last new index (11). F6 now appends,
+   commits and replies in one step, as `handleAppendEntries` does. Re-run
+   with the fix: the P2 witness gives the same table; code-faithful
+   simulation is clean (30,647 + 43,204 behaviors).
+2. **Upstream's trace spec can't validate any real restart.** raft logs
+   `InitState` before `loadState` (raft.go:469 vs 482), so a restart's
+   `InitState` shows term 0 / commit 0 / empty config. Fork change T1 (in
+   `Traceetcdraft.tla`) checks the restored state at the following
+   `BecomeFollower` instead.
+
+Upstream example trace re-validated with the T1 change: _pending_.
+
+Remaining in P4: P4b (server-layer traces vs `EtcdMembership.tla`) and P4c
+(robustness scenarios for learners). Trace scenarios with faults beyond
+restart (partitions, crashes mid-change) are not yet recorded.
+
 ### P5 Findings
 
 Record each finding below with: invariant violated, minimal trace, reproducing
@@ -468,3 +511,9 @@ it.**
     needs the guard checked at the leader at append time.
   - Next: P4 (traces from real runs), or triage of findings for
     disclosure (P5).
+- **2026-10-22**: P4a done.
+  - Real etcd raft traces (5 scenarios) validate against the spec under
+    upstream and code-faithful settings.
+  - Traces exposed a modelling error in F6 (fixed; P2 conclusions
+    unchanged) and an upstream trace-spec gap for restarts (T1).
+  - Next: P4b/P4c or P5.
