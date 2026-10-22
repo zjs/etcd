@@ -72,6 +72,44 @@ minimal reproducing test as evidence before deciding whether to report it.
   bounds; record state count and wall time here.
 - Optional: a SessionStart hook so later sessions have the tools ready.
 
+**P0 results (2026-10-22, cloud session: 4 cores, 15 GB, OpenJDK 21):**
+
+- `tools/tlc.sh` pins TLC build 2026.10.06 (rev `94d0c50`) via the TLA+ VS
+  Code extension 2026.10.60203 on Open VSX. `nightly.tlapl.us` and GitHub
+  release downloads were not reachable from the session. First fetch takes
+  about 1 s, so no SessionStart hook is needed.
+- `raft/` holds the upstream spec unchanged (see `raft/SOURCE.md`).
+- **Exhaustive (BFS) checking does not finish in a session**, even at small
+  bounds. The spec allows unbounded crashes, drops, duplicates and
+  heartbeats. With no invariant violations in either run:
+  - 3 members + 1 spare, 1 reconfig, 1 request, term ≤ 3: 5.7M distinct
+    states, depth 14 after 10 min, queue still growing.
+  - `MCetcdraft-smoke.cfg` (2 + 1 spare, same limits): 16.2M distinct
+    states, depth 18 after 15 min, queue at 9.9M and growing.
+- **Simulation is the practical in-session mode.** Upstream
+  `MCetcdraft.cfg`, `-simulate num=30000 -depth 100`, 3 workers: 90,000
+  random behaviors (mean length 85), 9.4M states, 6 min 37 s, no
+  violations (seed `8692819047272779617`).
+- **Trace validation** of upstream `example.ndjson` (4,888 lines) needs
+  `-workers 1` (the spec asserts it). It slows as it goes: about 3,400
+  events in 15 min. Result: _pending_.
+
+Consequences for later phases:
+
+- P2 needs state constraints (e.g. caps on crashes and in-flight messages)
+  to get exhaustive results at small bounds; otherwise rely on simulation
+  plus long runs outside sessions.
+- P4 traces must stay short (hundreds to low thousands of events per file),
+  or validation will dominate session time.
+
+How to run:
+
+```sh
+verification/tools/tlc.sh -workers auto -config verification/raft/MCetcdraft-smoke.cfg verification/raft/MCetcdraft.tla
+verification/tools/tlc.sh -workers 3 -simulate num=30000 -depth 100 -config verification/raft/MCetcdraft.cfg verification/raft/MCetcdraft.tla
+JSON=$PWD/verification/raft/example.ndjson verification/tools/tlc.sh -workers 1 -lncheck final -config verification/raft/Traceetcdraft.cfg verification/raft/Traceetcdraft.tla
+```
+
 ### P1 Code map and informal invariants
 
 Produce `verification/membership-map.md` covering every path that reads or
