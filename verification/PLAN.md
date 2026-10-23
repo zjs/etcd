@@ -58,7 +58,7 @@ minimal reproducing test as evidence before deciding whether to report it.
       upstream spec; calibrate against a known historical bug.
 - [x] **P3 Server-layer model**: new spec for etcd's membership state
       machine above Raft.
-- [ ] **P4 Model–code conformance**: trace validation and new robustness
+- [x] **P4 Model–code conformance**: trace validation and new robustness
       scenarios.
 - [ ] **P5 Findings**: reproduce, write up, decide on disclosure.
 
@@ -396,6 +396,67 @@ Remaining in P4: P4b (server-layer traces vs `EtcdMembership.tla`) and P4c
 (robustness scenarios for learners). Trace scenarios with faults beyond
 restart (partitions, crashes mid-change) are not yet recorded.
 
+**P4b results (2026-10-23).**
+
+*Instrumentation:* `server/etcdserver/membership_trace_tla.go` (tag
+`with_tla`, env `ETCD_TLA_MEMBERSHIP_TRACE_FILE`) logs these events:
+- `Start` (restored view, position);
+- `Stop`;
+- guard `Request` / `Reject`;
+- `Apply` (op and post-apply view).
+
+Conf changes are numbered by position among client-originated entries
+(`cc.Id != 0`). Untagged code gains only no-op hook calls (`server.go`:
+`Start`, `HardStop`, the three guards, a deferred hook in
+`applyConfChange`).
+
+*Trace spec:* `server/TraceEtcdMembership.tla` replays each line through
+`EtcdMembership`:
+- `Request`/`Reject` must agree with the model's guard;
+- `Apply` must produce the logged view;
+- commit, persist, liveness observation (`ConnLag`) and catch-up are hidden
+  steps TLC fills in.
+
+Success is shown by violating `TraceNotDone`. Runner:
+`tools/validate-membership-trace.sh`.
+
+*Results:* real traces of `TestMembershipTraceLifecycle` (learner
+add/start/promote with a not-ready rejection, a guard rejection while a
+voter is down, restart, removal) and of the H1, H2, H3-add and H3-remove
+reproductions all validate. So on these paths, including those that end
+in quorum loss, the model's guards and apply-time validation make the
+same decisions as the code. Three corrupted traces (wrong post-apply view,
+premature promote, reordered applies) fail at the corrupted line.
+
+*What real traces caught:*
+1. **Guards right after startup.** They refuse adds for `HealthInterval`
+   ("unhealthy cluster"), so with `ConnLag` peers now start unobserved
+   (`EtcdMembership.tla` `Init`). The P3 `Hleader-lag` result is unchanged.
+2. **`--max-learners` can change across restarts.** H1 does exactly that;
+   the model holds it constant. The trace spec uses each member's last
+   `Start` value (a documented limitation).
+3. **My H3-remove test misjudged success.** A self-removing member can
+   return an error to the client after the removal was applied. The test
+   now judges by membership, and reproduces again (2/2).
+
+**P4c results (2026-10-23).**
+
+*New failpoints* in `tests/robustness/failpoint/learner.go`, registered in
+`allFailpoints`, so exploratory runs also pick them:
+- `MemberReplaceAsLearner`: remove a member, wipe it, re-add it as a
+  learner, start it, then promote it (retrying while it isn't ready).
+- `MemberReplaceLearnerChurn`: the same, but the learner is removed,
+  wiped and re-added once before promotion.
+
+*Targeted test:* `tests/robustness/verification_learner_test.go` (tag
+`verification`) runs both on 3-member clusters with `EtcdPutDeleteLease`
+traffic. Results: 4/4 runs each pass linearizability, watch and
+serializable validation.
+
+These exercise learner add, promote and removal under client traffic, but
+not combined with crashes or partitions (one failpoint per run). A
+composite failpoint is future work.
+
 ### P5 Findings
 
 Record each finding below with: invariant violated, minimal trace, reproducing
@@ -517,3 +578,10 @@ it.**
   - Traces exposed a modelling error in F6 (fixed; P2 conclusions
     unchanged) and an upstream trace-spec gap for restarts (T1).
   - Next: P4b/P4c or P5.
+- **2026-10-23**: P4b and P4c done.
+  - Server-layer membership traces (lifecycle + H1/H2/H3 reproductions)
+    validate against `EtcdMembership.tla`. Traces also exposed a startup
+    liveness detail, a model limitation (`--max-learners` across
+    restarts) and a flaw in my H3-remove test, all fixed.
+  - New learner failpoints pass robustness validation (4/4 each).
+  - Next: P5 triage.
