@@ -101,8 +101,10 @@ func TestTraceRemoveMember(t *testing.T) {
 	follower := (lead + 1) % 3
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	require.NoError(t, clus.RemoveMember(t, clus.Client(lead), uint64(clus.Members[follower].Server.MemberID())))
-	_, err := clus.Client(lead).Put(ctx, "k", "v")
+	// RemoveMember drops the member from clus.Members, shifting indexes.
+	cli := clus.Client(lead)
+	require.NoError(t, clus.RemoveMember(t, cli, uint64(clus.Members[follower].Server.MemberID())))
+	_, err := cli.Put(ctx, "k", "v")
 	require.NoError(t, err)
 }
 

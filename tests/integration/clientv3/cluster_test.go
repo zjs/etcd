@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/client/pkg/v3/types"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/tests/v3/framework/integration"
@@ -524,6 +525,16 @@ func TestMaxLearnerMixedConfig(t *testing.T) {
 	m0.MaxLearners = 2
 	require.NoError(t, m0.Restart(t))
 	clus.WaitLeader(t)
+
+	// Below cluster version 3.8 the limit is also checked when applying.
+	require.Eventuallyf(t, func() bool {
+		for _, m := range clus.Members {
+			if v := m.Server.ClusterVersion(); v == nil || v.LessThan(&version.V3_8) {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "cluster version did not reach 3.8")
 
 	for i := 0; i < 2; i++ {
 		_, err := clus.Client(0).MemberAddAsLearner(t.Context(), []string{fmt.Sprintf("http://127.0.0.1:124%d", i)})
