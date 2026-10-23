@@ -30,14 +30,18 @@ CONSTANTS
     FixStaleView,           \* proposer must have applied the whole log first
     FixPromoteLiveness,     \* promote guard counts only reachable voters + live learner
     FixGuardAtCommit,       \* leader re-runs the guard on its view when it appends
+    FixCAS,                 \* conf change carries the membership its guard saw;
+                            \* rejected at apply time if the membership differs
+    FixLearnerLimitAtPropose, \* --max-learners checked by the proposer, not at apply
     ConnLag                 \* guards see liveness through a lagging observation
 
 ASSUME InitVoters \subseteq Server /\ InitVoters # {}
 ASSUME MaxLearners \in [Server -> Nat]
-ASSUME \A b \in {StrictReconfigCheck, FixStaleView, FixPromoteLiveness, FixGuardAtCommit, ConnLag} : b \in BOOLEAN
+ASSUME \A b \in {StrictReconfigCheck, FixStaleView, FixPromoteLiveness, FixGuardAtCommit, FixCAS, FixLearnerLimitAtPropose, ConnLag} : b \in BOOLEAN
 
 VARIABLES
-    log,        \* Seq of committed ops [kind, id]
+    log,        \* Seq of committed entries [kind, id, cas, base]; with cas,
+                \* base is the membership the guard checked (FixCAS)
     applied,    \* [Server -> Nat]
     mem,        \* [Server -> View]: in-memory membership view
     dur,        \* [Server -> [view: View, ci: Nat]]: backend (durable)
@@ -57,6 +61,10 @@ Ops == [kind : Kinds, id : Server]
 View == [voters : SUBSET Server, learners : SUBSET Server, removed : SUBSET Server]
 InitView == [voters |-> InitVoters, learners |-> {}, removed |-> {}]
 
+\* FixCAS: the membership a guard ran against (voters and learners only, as
+\* in membership.MembershipDigest).
+BaseOf(v) == [voters |-> v.voters, learners |-> v.learners]
+
 q(n) == n \div 2 + 1
 Members(v) == v.voters \cup v.learners
 
@@ -67,10 +75,11 @@ Up(x) == IF ConnLag THEN seen[x] ELSE alive[x]
 \* Apply-time validation (cluster.go ValidateConfigurationChange) on member
 \* s's view, with s's own --max-learners.
 Valid(op, v, s) ==
+    /\ ("cas" \in DOMAIN op /\ op.cas) => op.base = BaseOf(v)
     /\ op.id \notin v.removed
     /\ CASE op.kind = "addVoter"   -> op.id \notin Members(v)
          [] op.kind = "addLearner" -> /\ op.id \notin Members(v)
-                                      /\ Cardinality(v.learners) + 1 <= MaxLearners[s]
+                                      /\ FixLearnerLimitAtPropose \/ Cardinality(v.learners) + 1 <= MaxLearners[s]
          [] op.kind = "promote"    -> op.id \in v.learners
          [] op.kind = "remove"     -> op.id \in Members(v)
 
@@ -161,9 +170,13 @@ Request(op, p) ==
                               /\ op.id \in mem[p].learners
                               /\ caughtUp[op.id]          \* isLearnerReady
     /\ FixStaleView => applied[p] = Len(log)
+    /\ (FixLearnerLimitAtPropose /\ op.kind = "addLearner") => Cardinality(mem[p].learners) + 1 <= MaxLearners[p]
     /\ StrictReconfigCheck => Guard(op, p)
-    /\ props' = props \cup {[op |-> op, by |-> p, up |-> {s \in Server : alive[s]}]}
+    /\ props' = props \cup {[op |-> op, by |-> p, up |-> {s \in Server : alive[s]},
+                              cas |-> FixCAS /\ StrictReconfigCheck, base |-> BaseOf(mem[p])]}
     /\ UNCHANGED <<log, applied, mem, dur, alive, started, seen, caughtUp, unsafe, faults>>
+
+Entry(pr) == [kind |-> pr.op.kind, id |-> pr.op.id, cas |-> pr.cas, base |-> pr.base]
 
 \* The raft leader accepts the proposal (no other change pending: it has
 \* applied the whole log) and it commits under the leader's current config.
@@ -173,7 +186,7 @@ Commit(pr, l) ==
     \* Variant: the leader re-checks the guard on its own (current) view at
     \* append time, where raft's pending rule serializes changes.
     /\ (FixGuardAtCommit /\ StrictReconfigCheck) => Guard(pr.op, l)
-    /\ log' = Append(log, pr.op)
+    /\ log' = Append(log, Entry(pr))
     /\ props' = props \ {pr}
     \* The guard's contract: judged against liveness when it ran (later
     \* failures are out of its control), the change must not take the
@@ -184,7 +197,7 @@ Commit(pr, l) ==
     /\ LET up == IF FixGuardAtCommit THEN {s \in Server : alive[s]} ELSE pr.up
        IN unsafe' = (unsafe \/ (/\ StrictReconfigCheck
                                 /\ AvailWith(mem[l], up)
-                                /\ ~AvailWith(ApplyOp(pr.op, mem[l], l), up)))
+                                /\ ~AvailWith(ApplyOp(Entry(pr), mem[l], l), up)))
     /\ UNCHANGED <<applied, mem, dur, alive, started, seen, caughtUp, faults>>
 
 \* The request times out (or raft dropped it as a second pending change).
@@ -270,7 +283,7 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
     /\ \A s \in Server : mem[s] \in View /\ dur[s].view \in View
-    /\ \A i \in 1..Len(log) : log[i] \in Ops
+    /\ \A i \in 1..Len(log) : [kind |-> log[i].kind, id |-> log[i].id] \in Ops
 
 \* I10: with StrictReconfigCheck, no committed change takes the cluster
 \* from a reachable quorum to none, judged against liveness when its guard

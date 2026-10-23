@@ -475,7 +475,7 @@ func TestH1cExtraLearnerStartPanics(t *testing.T) {
 	t.Logf("launching second learner %s", l2.Name)
 	err = l2.Launch()
 	t.Logf("launch returned: %v", err)
-	defer l2.Terminate(t)
+	clus.Members = append(clus.Members, l2) // cluster teardown cleans it up
 
 	// If H1c holds, m1 and m2 panic while applying l2's attribute update.
 	time.Sleep(10 * time.Second)

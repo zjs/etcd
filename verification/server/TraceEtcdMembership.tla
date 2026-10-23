@@ -75,7 +75,7 @@ RejectLine(e) ==
 
 ApplyLine(e) ==
     /\ e.pos <= Len(log)
-    /\ log[e.pos] = OpOf(e)
+    /\ log[e.pos].kind = e.kind /\ log[e.pos].id = e.id
     /\ applied[e.nid] + 1 = e.pos
     /\ Apply(e.nid)
     /\ mem'[e.nid] = ViewOf(e)
