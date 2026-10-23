@@ -44,3 +44,16 @@ Integration test available (3/3 runs).
 
 **Etcd version:** main at bf9cadf; release-3.5 and release-3.6 (code
 inspection).
+
+**Candidate fix:** [`fix/promote-reachable-quorum`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/promote-reachable-quorum).
+`mayPromoteMember` counts voters connected for `HealthInterval` plus the
+learner if it is connected now, and requires a quorum of the new voter set.
+A promote forwarded to the leader now returns that refusal instead of
+retrying until it times out.
+
+The learner only has to be connected now, not for `HealthInterval`:
+existing e2e tests promote a learner as soon as it has caught up, often
+less than `HealthInterval` after it started
+(`TestRuntimeReconfigGrowClusterSize`, `TestReproduce20340`), and a
+learner that has just caught up was reachable moments ago. The new
+integration test fails without the change.

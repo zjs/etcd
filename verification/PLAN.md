@@ -60,7 +60,7 @@ minimal reproducing test as evidence before deciding whether to report it.
       machine above Raft.
 - [x] **P4 Model–code conformance**: trace validation and new robustness
       scenarios.
-- [~] **P5 Findings**: triaged; draft issues in `findings/`. Disclosure not decided.
+- [~] **P5 Findings**: triaged; draft issues and candidate fixes (one branch per fix) in `findings/`. Disclosure not decided.
 
 ## Phases
 
@@ -588,3 +588,22 @@ it.**
 - **2026-10-23**: P5 triage written: `findings/README.md` plus draft issues
   A–D. Nothing filed. Next: check drafts against current upstream `main`
   and issues, then decide what to file and where.
+- **2026-10-23**: Candidate fixes prepared (`findings/README.md`,
+  "Candidate fixes").
+  - On this branch: B, C1, C2, A1, A2, plus model variants and evidence.
+    Then cherry-picked onto etcd `main` (`3aaab3479`), one branch per fix,
+    without the scaffolding: `fix/promote-reachable-quorum`,
+    `fix/max-learners-at-propose`, `fix/membership-check-committed-view`,
+    `fix/membership-check-cas`.
+  - Regression runs caught two problems, both fixed. B's learner check
+    used `HealthInterval` and broke two e2e tests that promote right after
+    catch-up; the learner now only needs to be connected. A1 dropped the
+    apply-time limit check outright, so members of different versions could
+    disagree; it is now kept below cluster version 3.8.
+  - Also fixed a scaffold bug: the remove-member trace test indexed members
+    after `RemoveMember` shifted them (failed when the leader was last).
+  - D: patch for `etcd-io/raft` in `raft/upstream-patches/`; applies to
+    raft `main` (1931ff5, `tla/` unchanged since v3.7.0). 5 etcd traces
+    validate; 15-minute `MCetcdraft.cfg` simulation, about 106k
+    behaviors, no violation.
+  - Next: owner review of the branches (sign-off), then decide what to file.

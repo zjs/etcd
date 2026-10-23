@@ -64,3 +64,23 @@ before it updates its membership view. Both variants reproduce 3/3.
 
 **Etcd version:** main at bf9cadf; v3.5.29, v3.6.10 (remove guard, code
 inspection).
+
+**Candidate fixes:** two options, either or both:
+1. [`fix/membership-check-committed-view`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/membership-check-committed-view):
+   a linearizable read barrier before the add/remove guards, so they run
+   on a view that includes every committed change. Small, no data change,
+   but it closes only the stale-view case, not two concurrent requests,
+   and adds a ReadIndex round trip to member add/remove.
+2. [`fix/membership-check-cas`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/membership-check-cas): the conf
+   change carries a digest of the membership the guard checked (add,
+   promote, remove); apply rejects it with a new `ErrMembershipChanged`
+   (`FailedPrecondition`) if the membership differs. The decision depends
+   only on replicated state, so all members agree. It closes both cases
+   (in the model, no violation within bounds). Older members ignore the
+   field, so it is only set from cluster version 3.8. A change that would
+   still have been safe is rejected if the membership changed in between;
+   the client retries.
+
+Option 2 needs a decision on the API surface (error code) and version
+gating. Option 1 has no upstream-style test, because the window is too
+short to hit without the apply-loop freeze our reproduction uses.

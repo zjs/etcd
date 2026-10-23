@@ -61,3 +61,19 @@ each).
   3. Detect mismatched values at join or startup.
 
 **Etcd version:** main at bf9cadf; v3.6.x (code inspection).
+
+**Candidate fix:** [`fix/max-learners-at-propose`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/max-learners-at-propose),
+two commits, each with tests that fail without it:
+1. Check `--max-learners` in `mayAddMember`, when the change is proposed
+   (with or without strict reconfig check, as today). Keep the apply-time
+   check while the cluster version is below 3.8, so members of different
+   versions still agree; cluster version changes are applied in log order,
+   so all members switch at the same entry.
+2. `UpdateAttributes` logs an error and skips an unknown member instead of
+   panicking.
+
+Trade-off: the limit becomes a proposal-time check like the other
+membership guards. Each member enforces its own value on requests it
+receives, and two concurrent learner adds can together exceed it. If a
+cluster-wide limit is preferred, it could be stored in the backend instead;
+happy to rework it that way.

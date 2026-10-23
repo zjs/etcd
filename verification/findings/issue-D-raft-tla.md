@@ -51,3 +51,9 @@ rules this safety depends on.
 A patch with 1–7 (5 and 6 behind constants so the current behavior stays
 available) is ready. With it, the upstream example trace and traces from
 etcd integration runs validate.
+
+**Patch:** `verification/raft/upstream-patches/0001-*.patch` in our fork
+(applies with `git am` to `main` at 1931ff5). The new constants are TRUE in
+the shipped configs. With them, 5 traces from etcd integration runs
+(including a restart and leader removal) validate, and a 15-minute
+simulation of `MCetcdraft.cfg` (about 106k behaviors) finds no violation.
