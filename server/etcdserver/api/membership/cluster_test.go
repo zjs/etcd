@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -1175,6 +1176,37 @@ func TestClusterStore(t *testing.T) {
 
 			// Verify that removed members are correctly stored
 			assert.Equal(t, tt.removed, rst)
+		})
+	}
+}
+
+// TestClusterValidateConfigurationChangeMaxLearners checks that the learner
+// limit is checked when a learner add is applied only below cluster version
+// 3.8. From 3.8 it is enforced when the change is proposed, so that members
+// with different --max-learners make the same decision.
+func TestClusterValidateConfigurationChangeMaxLearners(t *testing.T) {
+	newMember := Member{ID: 3, RaftAttributes: RaftAttributes{PeerURLs: []string{"http://127.0.0.1:3"}, IsLearner: true}}
+	ctx, err := json.Marshal(&ConfigChangeContext{Member: newMember})
+	require.NoError(t, err)
+	cc := &raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode.Enum(), NodeId: new(uint64(3)), Context: ctx}
+
+	tests := []struct {
+		name    string
+		version *semver.Version
+		want    error
+	}{
+		{name: "no cluster version", want: ErrTooManyLearners},
+		{name: "3.7", version: semver.MustParse("3.7.0"), want: ErrTooManyLearners},
+		{name: "3.8", version: semver.MustParse("3.8.0")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cl := NewCluster(zaptest.NewLogger(t), WithMaxLearners(1))
+			cl.SetBackend(newMembershipBackend())
+			cl.AddMember(&Member{ID: 1, RaftAttributes: RaftAttributes{PeerURLs: []string{"http://127.0.0.1:1"}}}, true)
+			cl.AddMember(&Member{ID: 2, RaftAttributes: RaftAttributes{PeerURLs: []string{"http://127.0.0.1:2"}, IsLearner: true}}, true)
+			cl.version = tt.version
+			require.ErrorIs(t, cl.ValidateConfigurationChange(cc, true), tt.want)
 		})
 	}
 }
