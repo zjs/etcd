@@ -516,12 +516,16 @@ func (c *RaftCluster) UpdateAttributes(id types.ID, attr Attributes, shouldApply
 
 	_, ok := c.removed[id]
 	if !ok {
-		c.lg.Panic(
-			"failed to update; member unknown",
+		// The attributes belong to a member this member's membership does not
+		// contain. This should not happen, but panicking here turns it into a
+		// crash that recurs on every restart, since the same entry is replayed.
+		c.lg.Error(
+			"skipped attributes update of unknown member",
 			zap.String("cluster-id", c.cid.String()),
 			zap.String("local-member-id", c.localID.String()),
 			zap.String("unknown-remote-peer-id", id.String()),
 		)
+		return
 	}
 
 	c.lg.Warn(

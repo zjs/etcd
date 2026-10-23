@@ -1256,3 +1256,15 @@ func TestClusterValidateConfigurationChangeCheckedMembership(t *testing.T) {
 		})
 	}
 }
+
+// TestClusterUpdateAttributesUnknownMember ensures that an attribute update
+// for a member that is neither a member nor removed is skipped rather than
+// crashing the server.
+func TestClusterUpdateAttributesUnknownMember(t *testing.T) {
+	cl := newTestCluster(t, []*Member{newTestMember(1, nil, "1", nil)})
+	cl.SetBackend(newMembershipBackend())
+	require.NotPanics(t, func() {
+		cl.UpdateAttributes(types.ID(2), Attributes{Name: "unknown"}, true)
+	})
+	require.Nil(t, cl.Member(types.ID(2)))
+}
