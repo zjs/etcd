@@ -27,6 +27,9 @@ var (
 	ErrPeerURLexists    = errors.New("membership: peerURL exists")
 	ErrMemberNotLearner = errors.New("membership: can only promote a learner member")
 	ErrTooManyLearners  = errors.New("membership: too many learner members in cluster")
+	// ErrMembershipChanged is returned when a conf change was checked against
+	// a membership that changed before the conf change was applied.
+	ErrMembershipChanged = errors.New("membership: membership changed since the request was checked")
 )
 
 func isKeyNotFound(err error) bool {

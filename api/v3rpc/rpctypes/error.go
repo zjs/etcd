@@ -47,6 +47,7 @@ var (
 	ErrGRPCMemberNotLearner       = status.Error(codes.FailedPrecondition, "etcdserver: can only promote a learner member")
 	ErrGRPCLearnerNotReady        = status.Error(codes.FailedPrecondition, "etcdserver: can only promote a learner member which is in sync with leader")
 	ErrGRPCTooManyLearners        = status.Error(codes.FailedPrecondition, "etcdserver: too many learner members in cluster")
+	ErrGRPCMembershipChanged      = status.Error(codes.FailedPrecondition, "etcdserver: membership changed since the request was checked")
 	ErrGRPCClusterIDMismatch      = status.Error(codes.FailedPrecondition, "etcdserver: cluster ID mismatch")
 	//revive:disable:var-naming
 	// Deprecated: Please use ErrGRPCClusterIDMismatch.
@@ -122,6 +123,7 @@ var (
 		ErrorDesc(ErrGRPCMemberNotLearner):       ErrGRPCMemberNotLearner,
 		ErrorDesc(ErrGRPCLearnerNotReady):        ErrGRPCLearnerNotReady,
 		ErrorDesc(ErrGRPCTooManyLearners):        ErrGRPCTooManyLearners,
+		ErrorDesc(ErrGRPCMembershipChanged):      ErrGRPCMembershipChanged,
 		ErrorDesc(ErrGRPCClusterIDMismatch):      ErrGRPCClusterIDMismatch,
 
 		ErrorDesc(ErrGRPCRequestTooLarge):        ErrGRPCRequestTooLarge,
@@ -190,6 +192,7 @@ var (
 	ErrMemberNotLearner       = Error(ErrGRPCMemberNotLearner)
 	ErrMemberLearnerNotReady  = Error(ErrGRPCLearnerNotReady)
 	ErrTooManyLearners        = Error(ErrGRPCTooManyLearners)
+	ErrMembershipChanged      = Error(ErrGRPCMembershipChanged)
 
 	ErrRequestTooLarge = Error(ErrGRPCRequestTooLarge)
 	ErrTooManyRequests = Error(ErrGRPCRequestTooManyRequests)
