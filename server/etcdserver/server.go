@@ -1484,7 +1484,8 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 				return resp, nil
 			}
 			// If member promotion failed, return early. Otherwise keep retry.
-			if errorspkg.Is(err, errors.ErrLearnerNotReady) || errorspkg.Is(err, membership.ErrIDNotFound) || errorspkg.Is(err, membership.ErrMemberNotLearner) {
+			if errorspkg.Is(err, errors.ErrLearnerNotReady) || errorspkg.Is(err, membership.ErrIDNotFound) || errorspkg.Is(err, membership.ErrMemberNotLearner) ||
+				errorspkg.Is(err, errors.ErrUnhealthy) || errorspkg.Is(err, errors.ErrNotEnoughStartedMembers) {
 				return nil, err
 			}
 		}
@@ -1552,6 +1553,19 @@ func (s *EtcdServer) mayPromoteMember(id types.ID) error {
 			zap.Error(errors.ErrNotEnoughStartedMembers),
 		)
 		return errors.ErrNotEnoughStartedMembers
+	}
+
+	// Count only voters that are currently reachable, and require the learner
+	// itself to be reachable: once promoted it counts towards the quorum.
+	// IsReadyToPromoteMember only checks that members have ever started.
+	if !isConnectedToQuorumAfterPromotingSince(s.r.transport, time.Now().Add(-HealthInterval), s.MemberID(), s.cluster.VotingMembers(), id) {
+		lg.Warn(
+			"rejecting member promote request; reconfigure breaks active quorum",
+			zap.String("local-member-id", s.MemberID().String()),
+			zap.String("requested-member-promote-id", id.String()),
+			zap.Error(errors.ErrUnhealthy),
+		)
+		return errors.ErrUnhealthy
 	}
 
 	return nil

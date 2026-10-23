@@ -155,3 +155,77 @@ func TestExceedsRequestLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestIsConnectedToQuorumAfterPromotingSince(t *testing.T) {
+	const self, b, c, learner = types.ID(1), types.ID(2), types.ID(3), types.ID(4)
+	now := time.Now()
+	since := now.Add(-HealthInterval)
+	longAgo := since.Add(-time.Minute) // connected for longer than HealthInterval
+	recent := now                      // connected, but not for HealthInterval yet
+	voters := func(ids ...types.ID) []*membership.Member {
+		var ms []*membership.Member
+		for _, id := range ids {
+			ms = append(ms, &membership.Member{ID: id})
+		}
+		return ms
+	}
+
+	tests := []struct {
+		name   string
+		voters []*membership.Member
+		active map[types.ID]time.Time
+		want   bool
+	}{
+		{
+			name:   "all voters and learner connected",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: longAgo, c: longAgo, learner: longAgo},
+			want:   true,
+		},
+		{
+			name:   "one voter down, learner connected",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: longAgo, learner: longAgo},
+			want:   true,
+		},
+		{
+			name:   "one voter down, learner down",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: longAgo},
+			want:   false,
+		},
+		{
+			name:   "all voters connected, learner down",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: longAgo, c: longAgo},
+			want:   true,
+		},
+		{
+			name:   "one voter down, learner connected only recently",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: longAgo, learner: recent},
+			want:   false,
+		},
+		{
+			name:   "single voter, learner connected",
+			voters: voters(self),
+			active: map[types.ID]time.Time{learner: longAgo},
+			want:   true,
+		},
+		{
+			name:   "single voter, learner down",
+			voters: voters(self),
+			active: map[types.ID]time.Time{},
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := &nopTransporterWithActiveTime{activeMap: tt.active}
+			got := isConnectedToQuorumAfterPromotingSince(tr, since, self, tt.voters, learner)
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

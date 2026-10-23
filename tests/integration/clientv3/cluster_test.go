@@ -322,6 +322,56 @@ func TestMemberPromote(t *testing.T) {
 	}
 }
 
+// TestMemberPromoteUnreachableLearner ensures that, with strict reconfig check,
+// a learner that caught up but is no longer reachable is not promoted when
+// the promotion would leave the cluster without a reachable quorum.
+func TestMemberPromoteUnreachableLearner(t *testing.T) {
+	integration.BeforeTest(t)
+
+	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 3})
+	defer clus.Terminate(t)
+
+	leaderIdx := clus.WaitLeader(t)
+	capi := clus.Client(leaderIdx)
+
+	// Strict reconfig check needs peers connected for HealthInterval.
+	learner := clus.MustNewMember(t)
+	var resp *clientv3.MemberAddResponse
+	var err error
+	require.Eventually(t, func() bool {
+		resp, err = capi.MemberAddAsLearner(t.Context(), learner.PeerURLs.StringSlice())
+		return err == nil
+	}, 20*time.Second, 500*time.Millisecond, "failed to add learner: %v", err)
+	clus.InitializeMemberWithResponse(t, learner, resp)
+	require.NoError(t, learner.Launch())
+	_, err = capi.Put(t.Context(), "foo", "bar")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return learner.Server.AppliedIndex() >= clus.Members[leaderIdx].Server.AppliedIndex()
+	}, 10*time.Second, 100*time.Millisecond, "learner did not catch up")
+
+	// One voter and the learner go down: 2 of 3 voters remain.
+	clus.Members[(leaderIdx+1)%3].Stop(t)
+	learner.Stop(t)
+	time.Sleep(3 * time.Second)
+
+	// Promoting would need 3 of 4 voters, with 2 reachable.
+	_, err = capi.MemberPromote(t.Context(), resp.Member.ID)
+	require.ErrorContains(t, err, "unhealthy cluster")
+
+	// Same through the remaining follower, which forwards to the leader: the
+	// refusal comes back instead of a timeout.
+	start := time.Now()
+	_, err = clus.Client((leaderIdx+2)%3).MemberPromote(t.Context(), resp.Member.ID)
+	require.ErrorContains(t, err, "unhealthy cluster")
+	require.Less(t, time.Since(start), 3*time.Second, "forwarded refusal should not wait for a timeout")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err = capi.Put(ctx, "foo", "baz")
+	require.NoError(t, err, "cluster should still have a quorum")
+}
+
 // TestMemberPromoteMemberNotLearner ensures that promoting a voting member fails.
 func TestMemberPromoteMemberNotLearner(t *testing.T) {
 	integration.BeforeTest(t, integration.WithFailpoint("raftBeforeAdvance", `sleep(100)`))

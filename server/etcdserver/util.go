@@ -43,6 +43,18 @@ func isConnectedToQuorumAfterAddingNewMemberSince(transport rafthttp.Transporter
 	return numConnectedSince(transport, since, self, members) >= quorum(len(members)+1)
 }
 
+// isConnectedToQuorumAfterPromotingSince reports whether, after promoting the
+// given learner, the voters the local member has been connected to
+// continuously since the given time (plus the learner, if connected) form a
+// quorum of the new voting membership.
+func isConnectedToQuorumAfterPromotingSince(transport rafthttp.Transporter, since time.Time, self types.ID, voters []*membership.Member, learner types.ID) bool {
+	connected := numConnectedSince(transport, since, self, voters)
+	if isConnectedSince(transport, since, learner) {
+		connected++
+	}
+	return connected >= quorum(len(voters)+1)
+}
+
 func quorum(num int) int {
 	return num/2 + 1
 }
