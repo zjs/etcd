@@ -26,6 +26,7 @@ package verification
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -77,6 +78,7 @@ func viewOf(t *testing.T, m *integration.Member) memberView {
 // differently (invariant I1).
 func TestH1MixedMaxLearners(t *testing.T) {
 	integration.BeforeTest(t)
+	traceMembership(t, "h1")
 
 	// The proposal-time guard is off so adds aren't refused while peer
 	// connections are young; the learner limit is checked at apply time
@@ -147,6 +149,7 @@ func equalView(a, b memberView) bool {
 // leaving the cluster without a reachable quorum (invariant I10).
 func TestH2PromoteDeadLearner(t *testing.T) {
 	integration.BeforeTest(t)
+	traceMembership(t, "h2")
 
 	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 3}) // strict reconfig check on
 	defer clus.Terminate(t)
@@ -241,6 +244,7 @@ func TestH2PromoteDeadLearner(t *testing.T) {
 // under the election timeout (100ms in these tests).
 func TestH3StaleViewAddVoter(t *testing.T) {
 	integration.BeforeTest(t)
+	traceMembership(t, "h3-add")
 
 	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 4}) // strict reconfig check on
 	defer clus.Terminate(t)
@@ -353,6 +357,7 @@ func freezeApply(m *integration.Member) (release func()) {
 //	     Result: 2 voters {A, L}, 1 alive: no quorum.
 func TestH3StaleViewRemove(t *testing.T) {
 	integration.BeforeTest(t)
+	traceMembership(t, "h3-remove")
 
 	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 4}) // strict reconfig check on
 	defer clus.Terminate(t)
@@ -395,8 +400,12 @@ func TestH3StaleViewRemove(t *testing.T) {
 
 	err = <-done
 	t.Logf("op2 (remove S via S, stale view): err=%v", err)
-	if err != nil {
-		t.Logf("H3 (remove) not reproduced: stale-view request was rejected")
+	// S removes itself, so the client may see an error even when the
+	// removal was applied. Judge by the leader's view instead.
+	require.Eventually(t, func() bool { return votersIn(clus.Members[l]) <= 3 }, 5*time.Second, 50*time.Millisecond)
+	time.Sleep(time.Second)
+	if votersIn(clus.Members[l]) != 2 {
+		t.Logf("H3 (remove) not reproduced: stale-view removal was not applied (leader view: %d voters)", votersIn(clus.Members[l]))
 		return
 	}
 	putCtx, putCancel := context.WithTimeout(t.Context(), 15*time.Second)
@@ -471,4 +480,19 @@ func TestH1cExtraLearnerStartPanics(t *testing.T) {
 	// If H1c holds, m1 and m2 panic while applying l2's attribute update.
 	time.Sleep(10 * time.Second)
 	t.Logf("no panic within 10s (H1c not reproduced)")
+}
+
+// traceMembership records a server-layer membership trace for this test
+// when VERIFICATION_TRACE_DIR is set and the build has the with_tla tag
+// (otherwise the server ignores the variable). Validate with
+// verification/tools/validate-membership-trace.sh.
+func traceMembership(t *testing.T, name string) {
+	dir := os.Getenv("VERIFICATION_TRACE_DIR")
+	if dir == "" {
+		return
+	}
+	path := filepath.Join(dir, "membership-"+name+".ndjson")
+	require.NoError(t, os.RemoveAll(path))
+	t.Setenv("ETCD_TLA_MEMBERSHIP_TRACE_FILE", path)
+	t.Logf("membership trace: %s", path)
 }

@@ -531,6 +531,7 @@ func (s *EtcdServer) adjustTicks() {
 // Start must be non-blocking; any long-running server functionality
 // should be implemented in goroutines.
 func (s *EtcdServer) Start() {
+	s.traceMemberStart()
 	s.start()
 	s.GoAttach(func() { s.adjustTicks() })
 	s.GoAttach(func() { s.publishV3(s.Cfg.ReqTimeout()) })
@@ -1307,6 +1308,7 @@ func (s *EtcdServer) TryTransferLeadershipOnShutdown() error {
 
 // HardStop stops the server without coordination with other members in the cluster.
 func (s *EtcdServer) HardStop() {
+	s.traceMemberStop()
 	select {
 	case s.stop <- struct{}{}:
 	case <-s.done:
@@ -1385,8 +1387,10 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	}
 
 	// by default StrictReconfigCheck is enabled; reject new members if unhealthy.
-	if err := s.mayAddMember(memb); err != nil {
-		return nil, err
+	mayErr := s.mayAddMember(memb)
+	s.traceMemberRequest(map[bool]string{false: "addVoter", true: "addLearner"}[memb.IsLearner], memb.ID, mayErr)
+	if mayErr != nil {
+		return nil, mayErr
 	}
 
 	cc := raftpb.ConfChange{
@@ -1438,8 +1442,10 @@ func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership
 	}
 
 	// by default StrictReconfigCheck is enabled; reject removal if leads to quorum loss
-	if err := s.mayRemoveMember(types.ID(id)); err != nil {
-		return nil, err
+	mayErr := s.mayRemoveMember(types.ID(id))
+	s.traceMemberRequest("remove", types.ID(id), mayErr)
+	if mayErr != nil {
+		return nil, mayErr
 	}
 
 	cc := raftpb.ConfChange{
@@ -1502,8 +1508,10 @@ func (s *EtcdServer) promoteMember(ctx context.Context, id uint64) ([]*membershi
 	}
 
 	// check if we can promote this learner.
-	if err := s.mayPromoteMember(types.ID(id)); err != nil {
-		return nil, err
+	mayErr := s.mayPromoteMember(types.ID(id))
+	s.traceMemberRequest("promote", types.ID(id), mayErr)
+	if mayErr != nil {
+		return nil, mayErr
 	}
 
 	// build the context for the promote confChange. mark IsLearner to false and IsPromote to true.
@@ -2000,6 +2008,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry, shouldApplyV3 membership.
 // applyConfChange applies a ConfChange to the server. It is only
 // invoked with a ConfChange that has already passed through Raft
 func (s *EtcdServer) applyConfChange(cc *raftpb.ConfChange, ep *etcdProgress, shouldApplyV3 membership.ShouldApplyV3) (bool, error) {
+	defer s.traceConfChangeApplied(cloneConfChangeForTrace(cc), shouldApplyV3)
 	lg := s.Logger()
 	if err := s.cluster.ValidateConfigurationChange(cc, shouldApplyV3); err != nil {
 		lg.Error("Validation on configuration change failed", zap.Bool("shouldApplyV3", bool(shouldApplyV3)), zap.Error(err))

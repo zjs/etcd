@@ -142,7 +142,9 @@ Init ==
     /\ dur = [s \in Server |-> [view |-> InitView, ci |-> 0]]
     /\ alive = [s \in Server |-> s \in InitVoters]
     /\ started = [s \in Server |-> s \in InitVoters]
-    /\ seen = alive
+    \* With ConnLag, peers start unobserved: the guards need HealthInterval
+    \* of connectivity, which a just-started cluster doesn't have yet.
+    /\ seen = IF ConnLag THEN [s \in Server |-> FALSE] ELSE alive
     /\ caughtUp = [s \in Server |-> FALSE]
     /\ props = {}
     /\ unsafe = FALSE
