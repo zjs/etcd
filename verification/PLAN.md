@@ -60,7 +60,7 @@ minimal reproducing test as evidence before deciding whether to report it.
       machine above Raft.
 - [x] **P4 Model–code conformance**: trace validation and new robustness
       scenarios.
-- [ ] **P5 Findings**: reproduce, write up, decide on disclosure.
+- [~] **P5 Findings**: triaged; draft issues in `findings/`. Disclosure not decided.
 
 ## Phases
 
@@ -585,3 +585,6 @@ it.**
     restarts) and a flaw in my H3-remove test, all fixed.
   - New learner failpoints pass robustness validation (4/4 each).
   - Next: P5 triage.
+- **2026-10-23**: P5 triage written: `findings/README.md` plus draft issues
+  A–D. Nothing filed. Next: check drafts against current upstream `main`
+  and issues, then decide what to file and where.
