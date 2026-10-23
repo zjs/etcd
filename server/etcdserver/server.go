@@ -1387,6 +1387,10 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	}
 
 	// by default StrictReconfigCheck is enabled; reject new members if unhealthy.
+	// Check against a view that includes every committed membership change.
+	if err := s.waitForCommittedMembership(ctx); err != nil {
+		return nil, err
+	}
 	mayErr := s.mayAddMember(memb)
 	s.traceMemberRequest(map[bool]string{false: "addVoter", true: "addLearner"}[memb.IsLearner], memb.ID, mayErr)
 	if mayErr != nil {
@@ -1403,6 +1407,16 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	}
 
 	return s.configure(ctx, &cc)
+}
+
+// waitForCommittedMembership waits, with strict reconfig check, until the
+// local member has applied everything the leader has committed, so that the
+// proposal-time checks see the latest membership rather than a lagging view.
+func (s *EtcdServer) waitForCommittedMembership(ctx context.Context) error {
+	if !s.Cfg.StrictReconfigCheck {
+		return nil
+	}
+	return s.LinearizableReadNotify(ctx)
 }
 
 func (s *EtcdServer) mayAddMember(memb membership.Member) error {
@@ -1442,6 +1456,9 @@ func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership
 	}
 
 	// by default StrictReconfigCheck is enabled; reject removal if leads to quorum loss
+	if err := s.waitForCommittedMembership(ctx); err != nil {
+		return nil, err
+	}
 	mayErr := s.mayRemoveMember(types.ID(id))
 	s.traceMemberRequest("remove", types.ID(id), mayErr)
 	if mayErr != nil {
