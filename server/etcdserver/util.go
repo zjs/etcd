@@ -45,11 +45,16 @@ func isConnectedToQuorumAfterAddingNewMemberSince(transport rafthttp.Transporter
 
 // isConnectedToQuorumAfterPromotingSince reports whether, after promoting the
 // given learner, the voters the local member has been connected to
-// continuously since the given time (plus the learner, if connected) form a
-// quorum of the new voting membership.
+// continuously since the given time, plus the learner if it is connected now,
+// form a quorum of the new voting membership.
+//
+// The learner only needs to be connected now, not since the given time: it
+// has just caught up with the leader (IsReadyToPromoteMember), so it was
+// reachable moments ago, and a learner is commonly promoted as soon as it has
+// caught up, which may be less than HealthInterval after it started.
 func isConnectedToQuorumAfterPromotingSince(transport rafthttp.Transporter, since time.Time, self types.ID, voters []*membership.Member, learner types.ID) bool {
 	connected := numConnectedSince(transport, since, self, voters)
-	if isConnectedSince(transport, since, learner) {
+	if !transport.ActiveSince(learner).IsZero() {
 		connected++
 	}
 	return connected >= quorum(len(voters)+1)

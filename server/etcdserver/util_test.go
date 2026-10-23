@@ -161,7 +161,7 @@ func TestIsConnectedToQuorumAfterPromotingSince(t *testing.T) {
 	now := time.Now()
 	since := now.Add(-HealthInterval)
 	longAgo := since.Add(-time.Minute) // connected for longer than HealthInterval
-	recent := now                      // connected, but not for HealthInterval yet
+	recent := now.Add(-time.Second)    // connected, but not for HealthInterval yet
 	voters := func(ids ...types.ID) []*membership.Member {
 		var ms []*membership.Member
 		for _, id := range ids {
@@ -204,7 +204,19 @@ func TestIsConnectedToQuorumAfterPromotingSince(t *testing.T) {
 			name:   "one voter down, learner connected only recently",
 			voters: voters(self, b, c),
 			active: map[types.ID]time.Time{b: longAgo, learner: recent},
+			want:   true,
+		},
+		{
+			name:   "one voter down, other voter connected only recently",
+			voters: voters(self, b, c),
+			active: map[types.ID]time.Time{b: recent, learner: longAgo},
 			want:   false,
+		},
+		{
+			name:   "single voter, learner connected only recently",
+			voters: voters(self),
+			active: map[types.ID]time.Time{learner: recent},
+			want:   true,
 		},
 		{
 			name:   "single voter, learner connected",
