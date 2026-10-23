@@ -509,6 +509,47 @@ func TestMaxLearnerInCluster(t *testing.T) {
 	}
 }
 
+// TestMaxLearnerMixedConfig ensures that members started with different
+// --max-learners values still agree on membership: the limit is checked by
+// the member that receives the request, not when the change is applied.
+func TestMaxLearnerMixedConfig(t *testing.T) {
+	integration.BeforeTest(t)
+
+	clus := integration.NewCluster(t, &integration.ClusterConfig{Size: 3, MaxLearners: 1, DisableStrictReconfigCheck: true})
+	defer clus.Terminate(t)
+
+	// Member 0 allows two learners, members 1 and 2 allow one.
+	m0 := clus.Members[0]
+	m0.Stop(t)
+	m0.MaxLearners = 2
+	require.NoError(t, m0.Restart(t))
+	clus.WaitLeader(t)
+
+	for i := 0; i < 2; i++ {
+		_, err := clus.Client(0).MemberAddAsLearner(t.Context(), []string{fmt.Sprintf("http://127.0.0.1:124%d", i)})
+		require.NoError(t, err)
+	}
+	// A member allowing one learner refuses a third.
+	_, err := clus.Client(1).MemberAddAsLearner(t.Context(), []string{"http://127.0.0.1:1242"})
+	require.ErrorContains(t, err, "too many learner members in cluster")
+
+	// Every member applied both learner additions.
+	require.Eventually(t, func() bool {
+		for _, m := range clus.Members {
+			learners := 0
+			for _, mm := range m.Server.Cluster().Members() {
+				if mm.IsLearner {
+					learners++
+				}
+			}
+			if learners != 2 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 100*time.Millisecond, "members disagree on learners")
+}
+
 func getMemberByID(ctx context.Context, cli *clientv3.Client, id uint64) (member *etcdserverpb.Member, err error) {
 	var resp *clientv3.MemberListResponse
 	resp, err = cli.MemberList(ctx)

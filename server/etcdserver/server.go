@@ -1443,6 +1443,24 @@ func (s *EtcdServer) waitForCommittedMembership(ctx context.Context) error {
 
 func (s *EtcdServer) mayAddMember(memb membership.Member) error {
 	lg := s.Logger()
+
+	// The learner limit is enforced here, when the change is proposed, and
+	// not when it is applied: --max-learners is a per-member flag, and an
+	// apply-time check against it lets members with different values make
+	// different decisions for the same committed entry.
+	if memb.IsLearner {
+		if err := membership.ValidateMaxLearnerConfig(s.Cfg.MaxLearners, s.cluster.Members(), true); err != nil {
+			lg.Warn(
+				"rejecting member add request; too many learners",
+				zap.String("local-member-id", s.MemberID().String()),
+				zap.String("requested-member-add", fmt.Sprintf("%+v", memb)),
+				zap.Int("max-learners", s.Cfg.MaxLearners),
+				zap.Error(err),
+			)
+			return err
+		}
+	}
+
 	if !s.Cfg.StrictReconfigCheck {
 		return nil
 	}

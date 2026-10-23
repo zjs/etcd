@@ -438,12 +438,14 @@ func TestClusterValidateConfigurationChangeV3(t *testing.T) {
 			ErrIDNotFound,
 		},
 		{
+			// The learner limit is enforced when the change is proposed, not
+			// here, so that every member makes the same decision.
 			&raftpb.ConfChange{
 				Type:    raftpb.ConfChangeAddLearnerNode.Enum(),
 				NodeId:  new(uint64(7)),
 				Context: ctx7,
 			},
-			ErrTooManyLearners,
+			nil,
 		},
 		{
 			&raftpb.ConfChange{

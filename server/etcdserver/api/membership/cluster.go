@@ -376,10 +376,8 @@ func (c *RaftCluster) ValidateConfigurationChange(cc *raftpb.ConfChange, shouldA
 				return ErrIDExists
 			}
 
-			var members []*Member
 			urls := make(map[string]bool)
 			for _, m := range membersMap {
-				members = append(members, m)
 				for _, u := range m.PeerURLs {
 					urls[u] = true
 				}
@@ -389,13 +387,10 @@ func (c *RaftCluster) ValidateConfigurationChange(cc *raftpb.ConfChange, shouldA
 					return ErrPeerURLexists
 				}
 			}
-
-			if confChangeContext.Member.RaftAttributes.IsLearner && cc.GetType() == raftpb.ConfChangeAddLearnerNode { // the new member is a learner
-				scaleUpLearners := true
-				if err := ValidateMaxLearnerConfig(c.maxLearners, members, scaleUpLearners); err != nil {
-					return err
-				}
-			}
+			// The learner limit (--max-learners) is not checked here: it is a
+			// per-member setting, and this check must give the same result on
+			// every member. It is enforced when the change is proposed
+			// (EtcdServer.mayAddMember).
 		}
 	case raftpb.ConfChangeRemoveNode:
 		if membersMap[id] == nil {
