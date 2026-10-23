@@ -338,15 +338,15 @@ func TestMemberPromoteUnreachableLearner(t *testing.T) {
 	learner := clus.MustNewMember(t)
 	var resp *clientv3.MemberAddResponse
 	var err error
-	require.Eventually(t, func() bool {
+	require.Eventuallyf(t, func() bool {
 		resp, err = capi.MemberAddAsLearner(t.Context(), learner.PeerURLs.StringSlice())
 		return err == nil
-	}, 20*time.Second, 500*time.Millisecond, "failed to add learner: %v", err)
+	}, 20*time.Second, 500*time.Millisecond, "failed to add learner")
 	clus.InitializeMemberWithResponse(t, learner, resp)
 	require.NoError(t, learner.Launch())
 	_, err = capi.Put(t.Context(), "foo", "bar")
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
+	require.Eventuallyf(t, func() bool {
 		return learner.Server.AppliedIndex() >= clus.Members[leaderIdx].Server.AppliedIndex()
 	}, 10*time.Second, 100*time.Millisecond, "learner did not catch up")
 
@@ -364,12 +364,12 @@ func TestMemberPromoteUnreachableLearner(t *testing.T) {
 	start := time.Now()
 	_, err = clus.Client((leaderIdx+2)%3).MemberPromote(t.Context(), resp.Member.ID)
 	require.ErrorContains(t, err, "unhealthy cluster")
-	require.Less(t, time.Since(start), 3*time.Second, "forwarded refusal should not wait for a timeout")
+	require.Lessf(t, time.Since(start), 3*time.Second, "forwarded refusal should not wait for a timeout")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	_, err = capi.Put(ctx, "foo", "baz")
-	require.NoError(t, err, "cluster should still have a quorum")
+	require.NoErrorf(t, err, "cluster should still have a quorum")
 }
 
 // TestMemberPromoteMemberNotLearner ensures that promoting a voting member fails.
@@ -534,7 +534,7 @@ func TestMaxLearnerMixedConfig(t *testing.T) {
 	require.ErrorContains(t, err, "too many learner members in cluster")
 
 	// Every member applied both learner additions.
-	require.Eventually(t, func() bool {
+	require.Eventuallyf(t, func() bool {
 		for _, m := range clus.Members {
 			learners := 0
 			for _, mm := range m.Server.Cluster().Members() {
