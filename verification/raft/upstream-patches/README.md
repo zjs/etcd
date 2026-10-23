@@ -24,5 +24,5 @@ Checked with the patched files:
 | Check | Result |
 |---|---|
 | Trace validation, 5 traces from etcd integration runs (basic, learner promote, remove follower, remove leader, restart follower) | pass |
-| Trace validation, upstream `example.ndjson` | see `../../PLAN.md` session log |
+| Trace validation, upstream `example.ndjson` | pass (4,897 distinct states, 47 min) |
 | `MCetcdraft.cfg`, simulation, depth 100, 15 minutes | no violation (about 106k behaviors, 11.1M states) |

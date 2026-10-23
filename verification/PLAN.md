@@ -603,7 +603,7 @@ it.**
   - Also fixed a scaffold bug: the remove-member trace test indexed members
     after `RemoveMember` shifted them (failed when the leader was last).
   - D: patch for `etcd-io/raft` in `raft/upstream-patches/`; applies to
-    raft `main` (1931ff5, `tla/` unchanged since v3.7.0). 5 etcd traces
-    validate; 15-minute `MCetcdraft.cfg` simulation, about 106k
+    raft `main` (1931ff5, `tla/` unchanged since v3.7.0). Upstream
+    `example.ndjson` and 5 etcd traces validate; 15-minute `MCetcdraft.cfg` simulation, about 106k
     behaviors, no violation.
   - Next: owner review of the branches (sign-off), then decide what to file.
