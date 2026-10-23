@@ -1178,3 +1178,79 @@ func TestClusterStore(t *testing.T) {
 		})
 	}
 }
+
+// TestClusterValidateConfigurationChangeCheckedMembership checks that a conf
+// change carrying the digest of the membership it was checked against is
+// accepted only if the membership is unchanged when it is applied.
+func TestClusterValidateConfigurationChangeCheckedMembership(t *testing.T) {
+	cl := NewCluster(zaptest.NewLogger(t), WithMaxLearners(1))
+	cl.SetBackend(newMembershipBackend())
+	for i := 1; i <= 3; i++ {
+		attr := RaftAttributes{PeerURLs: []string{fmt.Sprintf("http://127.0.0.1:%d", i)}, IsLearner: i == 3}
+		cl.AddMember(&Member{ID: types.ID(i), RaftAttributes: attr}, true)
+	}
+	current := cl.MembershipDigest()
+
+	// The same membership with member 2 as a learner: a different digest.
+	stale := MembershipDigest(map[types.ID]*Member{
+		1: {ID: 1},
+		2: {ID: 2, RaftAttributes: RaftAttributes{IsLearner: true}},
+		3: {ID: 3, RaftAttributes: RaftAttributes{IsLearner: true}},
+	})
+	require.NotEqual(t, current, stale)
+
+	marshal := func(c ConfigChangeContext) []byte {
+		b, err := json.Marshal(c)
+		require.NoError(t, err)
+		return b
+	}
+	newMember := Member{ID: 4, RaftAttributes: RaftAttributes{PeerURLs: []string{"http://127.0.0.1:4"}}}
+
+	tests := []struct {
+		name string
+		cc   *raftpb.ConfChange
+		want error
+	}{
+		{
+			name: "add, no digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(uint64(4)), Context: marshal(ConfigChangeContext{Member: newMember})},
+		},
+		{
+			name: "add, current digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(uint64(4)), Context: marshal(ConfigChangeContext{Member: newMember, CheckedMembership: current})},
+		},
+		{
+			name: "add, stale digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(uint64(4)), Context: marshal(ConfigChangeContext{Member: newMember, CheckedMembership: stale})},
+			want: ErrMembershipChanged,
+		},
+		{
+			name: "promote, current digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(uint64(3)), Context: marshal(ConfigChangeContext{Member: Member{ID: 3}, IsPromote: true, CheckedMembership: current})},
+		},
+		{
+			name: "promote, stale digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeAddNode.Enum(), NodeId: new(uint64(3)), Context: marshal(ConfigChangeContext{Member: Member{ID: 3}, IsPromote: true, CheckedMembership: stale})},
+			want: ErrMembershipChanged,
+		},
+		{
+			name: "remove, no context",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode.Enum(), NodeId: new(uint64(2))},
+		},
+		{
+			name: "remove, current digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode.Enum(), NodeId: new(uint64(2)), Context: marshal(ConfigChangeContext{Member: Member{ID: 2}, CheckedMembership: current})},
+		},
+		{
+			name: "remove, stale digest",
+			cc:   &raftpb.ConfChange{Type: raftpb.ConfChangeRemoveNode.Enum(), NodeId: new(uint64(2)), Context: marshal(ConfigChangeContext{Member: Member{ID: 2}, CheckedMembership: stale})},
+			want: ErrMembershipChanged,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cl.ValidateConfigurationChange(tt.cc, true)
+			require.ErrorIs(t, err, tt.want)
+		})
+	}
+}

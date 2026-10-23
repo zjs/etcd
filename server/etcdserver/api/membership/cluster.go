@@ -17,7 +17,9 @@ package membership
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -67,6 +69,35 @@ type ConfigChangeContext struct {
 	// This flag is needed because both adding a new member and promoting a learner member
 	// uses the same config change type 'ConfChangeAddNode'.
 	IsPromote bool `json:"isPromote"`
+	// CheckedMembership, if set, is the MembershipDigest of the membership the
+	// proposal-time checks (strict reconfig check) ran against. The conf
+	// change is rejected at apply time if the membership differs, so a change
+	// is never applied to a membership it was not checked against.
+	CheckedMembership string `json:"checkedMembership,omitempty"`
+}
+
+// MembershipDigest returns a digest of the given members' IDs and roles
+// (voter or learner). It is the same on every member that has the same
+// membership.
+func MembershipDigest(members map[types.ID]*Member) string {
+	entries := make([]string, 0, len(members))
+	for id, m := range members {
+		role := "voter"
+		if m.IsLearner {
+			role = "learner"
+		}
+		entries = append(entries, id.String()+":"+role)
+	}
+	sort.Strings(entries)
+	sum := sha256.Sum256([]byte(strings.Join(entries, ",")))
+	return hex.EncodeToString(sum[:])
+}
+
+// MembershipDigest returns the digest of the current in-memory membership.
+func (c *RaftCluster) MembershipDigest() string {
+	c.Lock()
+	defer c.Unlock()
+	return MembershipDigest(c.members)
 }
 
 type ShouldApplyV3 bool
@@ -314,11 +345,23 @@ func (c *RaftCluster) ValidateConfigurationChange(cc *raftpb.ConfChange, shouldA
 	if removedMap[id] {
 		return ErrIDRemoved
 	}
+	if cc.GetType() == raftpb.ConfChangeRemoveNode && len(cc.Context) > 0 {
+		confChangeContext := new(ConfigChangeContext)
+		if err := json.Unmarshal(cc.Context, confChangeContext); err != nil {
+			c.lg.Panic("failed to unmarshal confChangeContext", zap.Error(err))
+		}
+		if confChangeContext.CheckedMembership != "" && confChangeContext.CheckedMembership != MembershipDigest(membersMap) {
+			return ErrMembershipChanged
+		}
+	}
 	switch cc.GetType() {
 	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
 		confChangeContext := new(ConfigChangeContext)
 		if err := json.Unmarshal(cc.Context, confChangeContext); err != nil {
 			c.lg.Panic("failed to unmarshal confChangeContext", zap.Error(err))
+		}
+		if confChangeContext.CheckedMembership != "" && confChangeContext.CheckedMembership != MembershipDigest(membersMap) {
+			return ErrMembershipChanged
 		}
 
 		if confChangeContext.IsPromote { // promoting a learner member to voting member

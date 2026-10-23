@@ -1391,10 +1391,16 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	if err := s.waitForCommittedMembership(ctx); err != nil {
 		return nil, err
 	}
+	checked := s.checkedMembershipDigest()
 	mayErr := s.mayAddMember(memb)
 	s.traceMemberRequest(map[bool]string{false: "addVoter", true: "addLearner"}[memb.IsLearner], memb.ID, mayErr)
 	if mayErr != nil {
 		return nil, mayErr
+	}
+	if checked != "" {
+		if b, err = json.Marshal(membership.ConfigChangeContext{Member: memb, CheckedMembership: checked}); err != nil {
+			return nil, err
+		}
 	}
 
 	cc := raftpb.ConfChange{
@@ -1407,6 +1413,22 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	}
 
 	return s.configure(ctx, &cc)
+}
+
+// checkedMembershipDigest returns the digest of the membership that the
+// strict reconfig checks are about to run against, to be carried in the conf
+// change and verified when it is applied (membership.ErrMembershipChanged).
+// It returns "" (no verification) without strict reconfig check, or while
+// the cluster version is below 3.8, since older members ignore the field
+// and would apply the change regardless.
+func (s *EtcdServer) checkedMembershipDigest() string {
+	if !s.Cfg.StrictReconfigCheck {
+		return ""
+	}
+	if v := s.ClusterVersion(); v == nil || v.LessThan(&version.V3_8) {
+		return ""
+	}
+	return s.cluster.MembershipDigest()
 }
 
 // waitForCommittedMembership waits, with strict reconfig check, until the
@@ -1459,6 +1481,7 @@ func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership
 	if err := s.waitForCommittedMembership(ctx); err != nil {
 		return nil, err
 	}
+	checked := s.checkedMembershipDigest()
 	mayErr := s.mayRemoveMember(types.ID(id))
 	s.traceMemberRequest("remove", types.ID(id), mayErr)
 	if mayErr != nil {
@@ -1468,6 +1491,13 @@ func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership
 	cc := raftpb.ConfChange{
 		Type:   raftpb.ConfChangeRemoveNode.Enum(),
 		NodeId: new(id),
+	}
+	if checked != "" {
+		b, err := json.Marshal(membership.ConfigChangeContext{Member: membership.Member{ID: types.ID(id)}, CheckedMembership: checked})
+		if err != nil {
+			return nil, err
+		}
+		cc.Context = b
 	}
 	return s.configure(ctx, &cc)
 }
@@ -1526,6 +1556,7 @@ func (s *EtcdServer) promoteMember(ctx context.Context, id uint64) ([]*membershi
 	}
 
 	// check if we can promote this learner.
+	checked := s.checkedMembershipDigest()
 	mayErr := s.mayPromoteMember(types.ID(id))
 	s.traceMemberRequest("promote", types.ID(id), mayErr)
 	if mayErr != nil {
@@ -1537,7 +1568,8 @@ func (s *EtcdServer) promoteMember(ctx context.Context, id uint64) ([]*membershi
 		Member: membership.Member{
 			ID: types.ID(id),
 		},
-		IsPromote: true,
+		IsPromote:         true,
+		CheckedMembership: checked,
 	}
 
 	b, err := json.Marshal(promoteChangeContext)
