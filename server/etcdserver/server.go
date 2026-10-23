@@ -1384,6 +1384,11 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 		return nil, err
 	}
 
+	// Check against a view that includes every committed membership change.
+	if err := s.waitForCommittedMembership(ctx); err != nil {
+		return nil, err
+	}
+
 	// by default StrictReconfigCheck is enabled; reject new members if unhealthy.
 	if err := s.mayAddMember(memb); err != nil {
 		return nil, err
@@ -1399,6 +1404,16 @@ func (s *EtcdServer) AddMember(ctx context.Context, memb membership.Member) ([]*
 	}
 
 	return s.configure(ctx, &cc)
+}
+
+// waitForCommittedMembership waits, with strict reconfig check, until the
+// local member has applied everything the leader has committed, so that the
+// proposal-time checks see the latest membership rather than a lagging view.
+func (s *EtcdServer) waitForCommittedMembership(ctx context.Context) error {
+	if !s.Cfg.StrictReconfigCheck {
+		return nil
+	}
+	return s.read.LinearizableReadNotify(ctx)
 }
 
 func (s *EtcdServer) mayAddMember(memb membership.Member) error {
@@ -1434,6 +1449,11 @@ func (s *EtcdServer) mayAddMember(memb membership.Member) error {
 
 func (s *EtcdServer) RemoveMember(ctx context.Context, id uint64) ([]*membership.Member, error) {
 	if err := s.checkMembershipOperationPermission(ctx); err != nil {
+		return nil, err
+	}
+
+	// Check against a view that includes every committed membership change.
+	if err := s.waitForCommittedMembership(ctx); err != nil {
 		return nil, err
 	}
 
