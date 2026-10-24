@@ -1541,10 +1541,31 @@ func (s *EtcdServer) mayPromoteMember(id types.ID) error {
 		lg.Warn(
 			"rejecting member promote request; not enough healthy members",
 			zap.String("local-member-id", s.MemberID().String()),
-			zap.String("requested-member-remove-id", id.String()),
+			zap.String("requested-member-promote-id", id.String()),
 			zap.Error(errors.ErrNotEnoughStartedMembers),
 		)
 		return errors.ErrNotEnoughStartedMembers
+	}
+
+	// Once promoted, the learner counts towards the quorum. Require voters
+	// connected for HealthInterval, plus the learner if it is connected now,
+	// to be a quorum of the new voting membership. IsReadyToPromoteMember
+	// only checks that members have ever started. If id is not a learner,
+	// the promotion is refused when applied.
+	if m := s.cluster.Member(id); m != nil && m.IsLearner {
+		voters := s.cluster.VotingMembers()
+		if !isConnectedToQuorumAfterPromotingSince(s.r.transport, time.Now().Add(-HealthInterval), s.MemberID(), voters, id) {
+			lg.Warn(
+				"rejecting member promote request; reconfigure breaks active quorum",
+				zap.String("local-member-id", s.MemberID().String()),
+				zap.String("requested-member-promote-id", id.String()),
+				zap.Int("active-voters", numConnectedSince(s.r.transport, time.Now().Add(-HealthInterval), s.MemberID(), voters)),
+				zap.Bool("learner-active", !s.r.transport.ActiveSince(id).IsZero()),
+				zap.Int("voters-after-promote", len(voters)+1),
+				zap.Error(errors.ErrUnhealthy),
+			)
+			return errors.ErrUnhealthy
+		}
 	}
 
 	return nil
