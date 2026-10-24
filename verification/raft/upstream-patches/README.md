@@ -32,7 +32,7 @@ Checked:
 | `RestartWitness` | violates on the series without commit 1; deadlocks on the full series (on `main` it stops earlier: its script needs commit 4) |
 | Trace validation, 5 etcd traces (basic, learner promote, remove follower, remove leader, restart follower) | pass |
 | Negative controls | a corrupted restart trace fails; the real restart trace fails on `main`'s trace spec |
-| Trace validation, `example.ndjson` | see the PLAN session log |
+| Trace validation, `example.ndjson` | pass (4,897 distinct states, 47 min) |
 | `MCetcdraft.cfg` simulation, depth 100, 15 minutes, 2 workers | no violation (about 97k behaviors, 10.1M states) |
 
 The draft issue and PR description are in `../../findings/issue-D-raft-tla.md`.

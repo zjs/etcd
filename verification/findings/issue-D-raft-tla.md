@@ -90,8 +90,8 @@ its invariants, so that a violation means a bug.
     restart and a leader removal), pass trace validation.
   - A corrupted restart trace fails, and the real restart trace fails on
     the current spec.
-  - A 15-minute simulation of `MCetcdraft.cfg` (without `SYMMETRY`) finds
-    no violation.
+  - A 15-minute simulation of `MCetcdraft.cfg` (without `SYMMETRY`; about
+    97k behaviors) finds no violation.
 - **Modeling assumption, now documented:** the spec has no applied index.
   A committed config entry counts as applied once the node's config
   matches it, which assumes `ApplyConfChange` is called before `Advance`
