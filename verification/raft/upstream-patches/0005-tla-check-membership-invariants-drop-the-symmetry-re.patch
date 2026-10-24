@@ -1,0 +1,104 @@
+From d8bf178823bb6f2e97a9c4d9a8cd78d422f712e4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:54:01 +0000
+Subject: [PATCH 5/7] tla: check membership invariants; drop the symmetry
+ reduction
+
+Add invariants about membership and check them in MCetcdraft.cfg:
+- LearnersVotersDisjointInv, ConfigEntryDisjointInv: no server is both a
+  voter and a learner.
+- KnowsPrevConfigCommittedInv: a server holding a config entry knows that
+  the previous one is committed.
+- AtMostOneUncommittedConfigInv: a leader has at most one uncommitted
+  config entry.
+
+Remove SYMMETRY from MCetcdraft.cfg. Permutations(Server) is not a
+symmetry of the spec: InitServer, the order of BootstrapLog and the spare
+servers make servers distinguishable, so the reduction could skip
+reachable states.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/MCetcdraft.cfg |  7 +++++--
+ tla/MCetcdraft.tla |  5 +++--
+ tla/etcdraft.tla   | 25 +++++++++++++++++++++++++
+ 3 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/tla/MCetcdraft.cfg b/tla/MCetcdraft.cfg
+index 31ad958..95f56d9 100644
+--- a/tla/MCetcdraft.cfg
++++ b/tla/MCetcdraft.cfg
+@@ -52,7 +52,6 @@ CONSTANTS
+     AppendEntriesRequest    =   "AppendEntriesRequest"
+     AppendEntriesResponse   =   "AppendEntriesResponse"
+ 
+-SYMMETRY Symmetry
+ VIEW View
+ 
+ CHECK_DEADLOCK 
+@@ -66,4 +65,8 @@ INVARIANTS
+     QuorumLogInv
+     MoreUpToDateCorrectInv
+     LeaderCompletenessInv
+-    CommittedIsDurableInv
+\ No newline at end of file
++    CommittedIsDurableInv
++    LearnersVotersDisjointInv
++    ConfigEntryDisjointInv
++    KnowsPrevConfigCommittedInv
++    AtMostOneUncommittedConfigInv
+diff --git a/tla/MCetcdraft.tla b/tla/MCetcdraft.tla
+index 5302c2b..a4a7a4e 100644
+--- a/tla/MCetcdraft.tla
++++ b/tla/MCetcdraft.tla
+@@ -108,8 +108,9 @@ mc_etcdSpec ==
+     /\ Init
+     /\ [][NextDynamic]_vars
+ 
+-\* Symmetry set over possible servers. May dangerous and is only enabled
+-\* via the Symmetry option in cfg file.
++\* Symmetry set over possible servers. Not a symmetry of this spec:
++\* InitServer, the order of BootstrapLog (SetToSeq) and the spare servers
++\* make servers distinguishable, so do not use it as SYMMETRY.
+ Symmetry == Permutations(Server)
+ 
+ \* Include all variables in the view, which is similar to defining no view.
+diff --git a/tla/etcdraft.tla b/tla/etcdraft.tla
+index c6d83d4..20ef30d 100644
+--- a/tla/etcdraft.tla
++++ b/tla/etcdraft.tla
+@@ -920,6 +920,31 @@ CommittedIsDurableInv ==
+     \A i \in Server :
+         state[i] = Leader => commitIndex[i] <= Len(durableState[i].log)
+ 
++\* No server is both a voter and a learner in its config.
++LearnersVotersDisjointInv ==
++    \A i \in Server : GetConfig(i) \cap GetLearners(i) = {}
++
++\* No config entry makes a server both a voter and a learner.
++ConfigEntryDisjointInv ==
++    \A i \in Server : \A k \in 1..Len(log[i]) :
++        log[i][k].type = ConfigEntry => log[i][k].value.newconf \cap log[i][k].value.learners = {}
++
++\* A server holding a config entry knows that the previous config entry is
++\* committed. With one change at a time, this keeps the config a node
++\* campaigns on within one change of the latest config entry it holds.
++KnowsPrevConfigCommittedInv ==
++    \A i \in Server :
++        LET cfgIdx == {k \in 1..Len(log[i]) : log[i][k].type = ConfigEntry}
++            last == MaxOrZero(cfgIdx)
++            prev == MaxOrZero(cfgIdx \ {last})
++        IN prev <= commitIndex[i]
++
++\* A leader's log holds at most one config entry above its commit index
++\* (raft.go pendingConfIndex).
++AtMostOneUncommittedConfigInv ==
++    \A i \in Server : state[i] = Leader =>
++        Cardinality({k \in (commitIndex[i]+1)..Len(log[i]) : log[i][k].type = ConfigEntry}) <= 1
++
+ -----
+ 
+ 
+-- 
+2.43.0
+

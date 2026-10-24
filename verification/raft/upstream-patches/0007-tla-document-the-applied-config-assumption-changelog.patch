@@ -1,0 +1,48 @@
+From 2299433e16574a9bee72df693e8fcce3055d0cd4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:54:46 +0000
+Subject: [PATCH 7/7] tla: document the applied-config assumption; changelog
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/README.md    | 3 +++
+ tla/etcdraft.tla | 9 +++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/tla/README.md b/tla/README.md
+index a29c487..49ef07b 100644
+--- a/tla/README.md
++++ b/tla/README.md
+@@ -83,6 +83,9 @@ By default validate.sh uses all CPU cores to validate the traces. You can also s
+ 
+ Validating all traces in a file may take a long time. You can specify `MAX_TRACE` environment variable to limit the validation only on top `MAX_TRACE` traces in each file.
+ 
++## Modeling Assumptions
++The spec has no applied index. A committed config entry counts as applied once the node's config matches it (`HasUnappliedCommittedConfig`), which assumes the application calls `ApplyConfChange` for a committed conf change before raft considers it applied (`Advance`), as in the example loop in `doc.go`. Raft allows `Advance` earlier; that case is not modeled.
++
+ ## Known Issues
+ 1. **Partially persisted log**. 
+ etcdraft assumes atomic persisiting of states in Read action. This, however, may not apply in real-world application. For example, etcd may persist a prefix log when it crashes in the middle of saving data to disks. 
+diff --git a/tla/etcdraft.tla b/tla/etcdraft.tla
+index 20ef30d..16194b0 100644
+--- a/tla/etcdraft.tla
++++ b/tla/etcdraft.tla
+@@ -954,6 +954,15 @@ AtMostOneUncommittedConfigInv ==
+ 
+ \* Changelog:
+ \* 
++\* 2026-10-24:
++\* - Restart restores the persisted log, not a prefix of the in-memory log.
++\* - Model learner promotion, vote requests and vote counting as the code
++\*   does.
++\* - Model the pending conf change rule (pendingConfIndex), hup's check for
++\*   unapplied conf changes, and maybeAppend's commit with the append.
++\* - reconfigCount counts proposed config entries.
++\* - Add membership invariants; MCetcdraft.cfg no longer uses SYMMETRY.
++\*
+ \* 2023-11-23:
+ \* - Replace configuration actions by those in etcd implementation.
+ \* - Refactor spec structure to decouple core spec and model checker spec for 
+-- 
+2.43.0
+

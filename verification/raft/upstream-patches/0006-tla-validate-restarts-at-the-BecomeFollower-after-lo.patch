@@ -1,0 +1,80 @@
+From 18f68de2e60612afa66faef96bea370e32924da8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:54:30 +0000
+Subject: [PATCH 6/7] tla: validate restarts at the BecomeFollower after
+ loading state
+
+newRaft logs InitState before loadState, so on a restart the InitState
+line shows the state before the persisted state is loaded: term 0, an
+empty config, and the snapshot's commit index rather than the persisted
+one. RestartIfLogged validated the restarted state against that line, so
+no trace with a restart could validate.
+
+Don't validate at InitState. Instead, check the restored state at the
+BecomeFollower that newRaft logs after loading it. That line is
+recognized as the one whose previous line for the node, apart from the
+ApplyConfChange lines that restoring the config logs, is the InitState.
+
+An alternative is to log InitState after loadState in raft.go; this
+keeps the trace format unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/Traceetcdraft.tla | 31 ++++++++++++++++++++++++++++++-
+ 1 file changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/tla/Traceetcdraft.tla b/tla/Traceetcdraft.tla
+index ccbae2d..cc46cf1 100644
+--- a/tla/Traceetcdraft.tla
++++ b/tla/Traceetcdraft.tla
+@@ -358,10 +358,37 @@ ReadyIfLogged(i) ==
+     /\ LoglineIsNodeEvent("Ready", i)
+     /\ Ready(i)
+ 
++\* raft.go newRaft logs InitState before loadState, so on a restart the
++\* InitState line shows the state before the persisted state is loaded (the
++\* snapshot's commit index, term 0, an empty config), which the restored
++\* state does not match. The restart is therefore not validated at
++\* InitState; the restored state is checked at the BecomeFollower line that
++\* newRaft logs after loading it (RestartBecomeFollowerIfLogged).
+ RestartIfLogged(i) ==
+     /\ LoglineIsNodeEvent("InitState", i)
+     /\ Restart(i)
+-    /\ ValidatePostStates(i)
++
++\* The last line for node i before the current one, ignoring the
++\* ApplyConfChange lines that restoring the config logs.
++PrevNodeLineIgnoringConfChange(i) ==
++    LET k == SelectLastInSubSeq(TraceLog, 1, l-1,
++                 LAMBDA x: x.event.nid = i /\ x.event.name # "ApplyConfChange")
++    IN IF k > 0 THEN TraceLog[k] ELSE logline
++
++\* The BecomeFollower that newRaft logs right after a restart: the previous
++\* line for node i, apart from restored-config ApplyConfChange lines, is the
++\* InitState that RestartIfLogged consumed. Restart already restored the
++\* state; check that it matches.
++RestartBecomeFollowerIfLogged(i) ==
++    /\ LoglineIsNodeEvent("BecomeFollower", i)
++    /\ PrevNodeLineIgnoringConfChange(i).event.name = "InitState"
++    /\ state[i] = Follower
++    /\ currentTerm[i] = logline.event.state.term
++    /\ votedFor[i] = logline.event.state.vote
++    /\ Len(log[i]) = logline.event.log
++    /\ commitIndex[i] = logline.event.state.commit
++    /\ config[i].jointConfig = ConfFromLog(logline)
++    /\ UNCHANGED <<vars>>
+ 
+ LoglineIsBecomeFollowerInUpdateTermOrReturnToFollower ==
+     /\ LoglineIsEvent("BecomeFollower")
+@@ -426,6 +453,8 @@ TraceNextNonReceiveActions ==
+           /\ \E i \in Server: RestartIfLogged(i)
+        \/ /\ LoglineIsEvent("BecomeFollower")
+           /\ \E i \in Server: StepDownToFollowerIfLogged(i)
++       \/ /\ LoglineIsEvent("BecomeFollower")
++          /\ \E i \in Server: RestartBecomeFollowerIfLogged(i)
+        \/ SkipUnusedLogline
+     /\ StepToNextTrace
+     
+-- 
+2.43.0
+

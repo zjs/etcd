@@ -1,0 +1,148 @@
+From f5e3d7425fcc39086a3e643447a8687163da543f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:53:12 +0000
+Subject: [PATCH 3/7] tla: model the pending conf change rule as the code does
+
+raft.go allows a new conf change only while pendingConfIndex <= applied,
+and becomeLeader sets pendingConfIndex to the last index, so a new leader
+first applies every config entry it inherited.
+
+The spec allowed a new config entry only while pendingConfChangeIndex was
+0, and ApplySimpleConfChange reset it when it was >= the applied index k.
+The comparison is reversed (the code's condition is pending <= applied),
+and re-applying an older committed config is always enabled, so a leader
+could reset the index at will and append a second config entry while the
+first was uncommitted. A new leader also started with no pending index.
+
+- BecomeLeader sets pendingConfChangeIndex to the last index.
+- A config entry may be appended while pendingConfChangeIndex <= commit
+  and every committed config entry has been applied (CanProposeConf). The
+  spec has no applied index; see HasUnappliedCommittedConfig for the
+  approximation and its assumptions.
+- ApplySimpleConfChange no longer resets the index.
+- reconfigCount now counts proposed config entries. It used to count only
+  entries applied by the leader that proposed them, so changes committed
+  after their proposer stepped down were not bounded by
+  ReconfigurationLimit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/etcdraft.tla | 56 +++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 41 insertions(+), 15 deletions(-)
+
+diff --git a/tla/etcdraft.tla b/tla/etcdraft.tla
+index 361b21c..87708b2 100644
+--- a/tla/etcdraft.tla
++++ b/tla/etcdraft.tla
+@@ -290,6 +290,28 @@ Restart(i) ==
+     /\ config' = [config EXCEPT ![i] = durableState[i].config]
+     /\ UNCHANGED <<messages, durableState, reconfigCount>>
+ 
++\* Has server i committed a config entry that it has not applied yet?
++\*
++\* The spec has no applied index. It applies config entries in
++\* ApplySimpleConfChange, so a committed config entry is unapplied while the
++\* current config differs from it. This assumes the application applies a
++\* committed conf change (ApplyConfChange) before raft considers it applied
++\* (Advance), as in doc.go's example loop; raft allows Advance earlier, which
++\* is not modeled. Comparing configs also treats a config that returned to an
++\* earlier value as applied.
++HasUnappliedCommittedConfig(i) ==
++    LET k == SelectLastInSubSeq(log[i], 1, commitIndex[i], LAMBDA x: x.type = ConfigEntry)
++    IN /\ k > 0
++       /\ config[i] # [jointConfig |-> << log[i][k].value.newconf, {} >>, learners |-> log[i][k].value.learners]
++
++\* May leader i append a new config entry? raft.go stepLeader refuses a conf
++\* change while pendingConfIndex > applied; becomeLeader sets pendingConfIndex
++\* to the last index, so a new leader first applies every config entry it
++\* inherited.
++CanProposeConf(i) ==
++    /\ pendingConfChangeIndex[i] <= commitIndex[i]
++    /\ ~HasUnappliedCommittedConfig(i)
++
+ \* Server i times out and starts a new election.
+ \* @type: Int => Bool;
+ Timeout(i) == /\ state[i] \in {Follower, Candidate}
+@@ -383,7 +405,9 @@ BecomeLeader(i) ==
+     /\ state'      = [state EXCEPT ![i] = Leader]
+     /\ matchIndex' = [matchIndex EXCEPT ![i] =
+                          [j \in Server |-> IF j = i THEN Len(log[i]) ELSE 0]]
+-    /\ UNCHANGED <<messageVars, currentTerm, votedFor, pendingConfChangeIndex, candidateVars, logVars, configVars, durableState>>
++    \* raft.go becomeLeader: pendingConfIndex = lastIndex.
++    /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i] = Len(log[i])]
++    /\ UNCHANGED <<messageVars, currentTerm, votedFor, candidateVars, logVars, configVars, durableState>>
+     
+ Replicate(i, v, t) == 
+     /\ t \in {ValueEntry, ConfigEntry}
+@@ -432,40 +456,43 @@ AddNewServer(i, j) ==
+     /\ state[i] = Leader
+     /\ j \notin GetConfig(i)
+     /\ ~IsJointConfig(i)
+-    /\ IF pendingConfChangeIndex[i] = 0 THEN
++    /\ IF CanProposeConf(i) THEN
+             \* A promoted learner leaves the learner set (confchange.go makeVoter).
+             /\ Replicate(i, [newconf |-> GetConfig(i) \union {j}, learners |-> GetLearners(i) \ {j}], ConfigEntry)
+             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
++            /\ reconfigCount' = reconfigCount + 1
+        ELSE 
+             /\ Replicate(i, <<>>, ValueEntry)
+-            /\ UNCHANGED <<pendingConfChangeIndex>>
+-    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, configVars, durableState>>
++            /\ UNCHANGED <<pendingConfChangeIndex, reconfigCount>>
++    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, config, durableState>>
+ 
+ \* Leader i adds a leaner j to the cluster.
+ AddLearner(i, j) ==
+     /\ state[i] = Leader
+     /\ j \notin GetConfig(i) \union GetLearners(i)
+     /\ ~IsJointConfig(i)
+-    /\ IF pendingConfChangeIndex[i] = 0 THEN 
++    /\ IF CanProposeConf(i) THEN
+             /\ Replicate(i, [newconf |-> GetConfig(i), learners |-> GetLearners(i) \union {j}], ConfigEntry)
+             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
++            /\ reconfigCount' = reconfigCount + 1
+        ELSE 
+             /\ Replicate(i, <<>>, ValueEntry)
+-            /\ UNCHANGED <<pendingConfChangeIndex>>
+-    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, configVars, durableState>>
++            /\ UNCHANGED <<pendingConfChangeIndex, reconfigCount>>
++    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, config, durableState>>
+ 
+ \* Leader i removes a server j (possibly itself) from the cluster.
+ DeleteServer(i, j) ==
+     /\ state[i] = Leader
+     /\ j \in GetConfig(i) \union GetLearners(i)
+     /\ ~IsJointConfig(i)
+-    /\ IF pendingConfChangeIndex[i] = 0 THEN
++    /\ IF CanProposeConf(i) THEN
+             /\ Replicate(i, [newconf |-> GetConfig(i) \ {j}, learners |-> GetLearners(i) \ {j}], ConfigEntry)
+             /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i]=Len(log'[i])]
++            /\ reconfigCount' = reconfigCount + 1
+        ELSE 
+             /\ Replicate(i, <<>>, ValueEntry)
+-            /\ UNCHANGED <<pendingConfChangeIndex>>
+-    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, configVars, durableState>>
++            /\ UNCHANGED <<pendingConfChangeIndex, reconfigCount>>
++    /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, commitIndex, config, durableState>>
+ 
+ ApplySimpleConfChange(i) ==
+     /\ ~IsJointConfig(i)
+@@ -474,11 +501,10 @@ ApplySimpleConfChange(i) ==
+             /\ k > 0
+             /\ k <= commitIndex[i]
+             /\ config' = ApplyConfigUpdate(i, k)
+-            /\ IF state[i] = Leader /\ pendingConfChangeIndex[i] >= k THEN 
+-                /\ reconfigCount' = reconfigCount + 1
+-                /\ pendingConfChangeIndex' = [pendingConfChangeIndex EXCEPT ![i] = 0]
+-               ELSE UNCHANGED <<reconfigCount, pendingConfChangeIndex>>
+-            /\ UNCHANGED <<messageVars, serverVars, candidateVars, matchIndex, logVars, durableState>>
++            \* The pending index is not reset here: CanProposeConf compares it
++            \* with the commit index, as stepLeader compares pendingConfIndex
++            \* with the applied index.
++            /\ UNCHANGED <<messageVars, serverVars, candidateVars, leaderVars, logVars, reconfigCount, durableState>>
+     
+ Ready(i) ==
+     /\ PersistState(i)
+-- 
+2.43.0
+

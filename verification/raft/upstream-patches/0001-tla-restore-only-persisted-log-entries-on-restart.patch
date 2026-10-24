@@ -1,0 +1,75 @@
+From a99e9fa09e3d51d8bd519f4f9ef61be384310852 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:56:55 +0000
+Subject: [PATCH 1/7] tla: restore only persisted log entries on restart
+
+PersistState recorded only the length of the log, and Restart restored the
+in-memory log truncated to that length. If entries were overwritten in
+memory after they were persisted (a follower accepting a new leader's
+entries before its next Ready), a restart kept entries that were never
+persisted and lost persisted ones.
+
+This alone lets MCetcdraft elect two leaders in one term, even once the
+spec models the code's conf change rules (later in this series): a
+restarted node holds a newer leader's config entries with an older commit
+index and config, wins an election on the old config, while another node
+wins on the new config in the same term (RestartWitness, 78 steps).
+
+Persist the log itself, restore it on restart, and compare against its
+length in CommittedIsDurableInv.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/etcdraft.tla | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/tla/etcdraft.tla b/tla/etcdraft.tla
+index 7828474..4591ad9 100644
+--- a/tla/etcdraft.tla
++++ b/tla/etcdraft.tla
+@@ -226,11 +226,14 @@ CommitTo(i, c) ==
+ 
+ CurrentLeaders == {i \in Server : state[i] = Leader}
+ 
++\* The persisted state includes the log itself, not only its length: entries
++\* can be overwritten in memory after they were persisted, and a restart must
++\* restore the persisted ones.
+ PersistState(i) == 
+     durableState' = [durableState EXCEPT ![i] = [
+         currentTerm |-> currentTerm[i],
+         votedFor |-> votedFor[i],
+-        log |-> Len(log[i]),
++        log |-> log[i],
+         commitIndex |-> commitIndex[i],
+         config |-> config[i]
+     ]]
+@@ -254,7 +257,7 @@ InitDurableState ==
+     durableState = [ i \in Server |-> [
+         currentTerm |-> currentTerm[i],
+         votedFor |-> votedFor[i],
+-        log |-> Len(log[i]),
++        log |-> log[i],
+         commitIndex |-> commitIndex[i],
+         config |-> config[i]
+     ]]
+@@ -283,7 +286,7 @@ Restart(i) ==
+     /\ currentTerm' = [currentTerm EXCEPT ![i] = durableState[i].currentTerm]
+     /\ commitIndex' = [commitIndex EXCEPT ![i] = durableState[i].commitIndex]
+     /\ votedFor' = [votedFor EXCEPT ![i] = durableState[i].votedFor]
+-    /\ log' = [log EXCEPT ![i] = SubSeq(@, 1, durableState[i].log)]
++    /\ log' = [log EXCEPT ![i] = durableState[i].log]
+     /\ config' = [config EXCEPT ![i] = durableState[i].config]
+     /\ UNCHANGED <<messages, durableState, reconfigCount>>
+ 
+@@ -871,7 +874,7 @@ LeaderCompletenessInv ==
+ \* Any entry committed by leader shall be persisted already
+ CommittedIsDurableInv ==
+     \A i \in Server :
+-        state[i] = Leader => commitIndex[i] <= durableState[i].log
++        state[i] = Leader => commitIndex[i] <= Len(durableState[i].log)
+ 
+ -----
+ 
+-- 
+2.43.0
+

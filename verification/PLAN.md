@@ -607,3 +607,26 @@ it.**
     `example.ndjson` and 5 etcd traces validate; 15-minute `MCetcdraft.cfg` simulation, about 106k
     behaviors, no violation.
   - Next: owner review of the branches (sign-off), then decide what to file.
+- **2026-10-24**: Maintainer-perspective review and revisions
+  (`findings/reviews/`, `findings/README.md`).
+  - Four fresh reviewers each took one finding. All four said "needs
+    changes", and each found problems we had missed:
+    - **B:** a regression for promoting a voter, visible only with gofail.
+    - **A:** the proposal-time check leaves members unable to restart, and
+      removing the panic exposes the voter split.
+    - **C:** option 2's replay side effects, and the scaffold's option-1
+      evidence was not evidence.
+    - **D:** a second two-leaders path through `Restart`.
+  - Revised:
+    - B fix (2 commits);
+    - C option 1, with an e2e failpoint test;
+    - A as an issue with design options;
+    - D as a 7-commit series for etcd-io/raft, with replayable witnesses.
+  - Shelved: `fix/max-learners-at-propose`, `fix/membership-check-cas`.
+  - Every finding now has a reproduction that runs on stock upstream
+    (`findings/repro/`). Each fails on main and passes with its fix.
+  - Lesson: run gofail-gated tests (`make gofail-enable`) before claiming
+    a regression pass; judge a self-removal by membership, not by the
+    client's reply.
+  - Next: owner review; then file A–C on etcd-io/etcd and D on
+    etcd-io/raft.

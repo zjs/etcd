@@ -1,0 +1,70 @@
+From 129ec6241c10fb5a671a42b0174d04e637e6a77a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 15:53:31 +0000
+Subject: [PATCH 4/7] tla: model hup's conf change check and maybeAppend's
+ atomic commit
+
+Two rules in the code that election safety depends on across config
+changes, which the spec did not model:
+
+- raft.go hup refuses to campaign while there are committed but unapplied
+  conf changes (hasUnappliedConfChanges). Timeout now requires that every
+  committed config entry has been applied.
+- handleAppendEntries appends, commits up to min(m.Commit, last new index)
+  and replies with the last new index in one step (raftLog.maybeAppend).
+  The spec appended in NoConflictAppendEntriesRequest and committed and
+  replied in a later AppendEntriesAlreadyDone step, so a follower could
+  hold new config entries without knowing that the previous config entry
+  had committed.
+
+Without both, a 71-step behavior within MCetcdraft's bounds elects two
+leaders in one term: from config {1,2,3}, add 4 then remove 3; node 3 has
+both entries but does not know the first committed, and campaigns on the
+old config with {1,3} while another node wins on the new config.
+
+Conflicting entries are still truncated one per step
+(ConflictAppendEntriesRequest), as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tla/etcdraft.tla | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/tla/etcdraft.tla b/tla/etcdraft.tla
+index 87708b2..c6d83d4 100644
+--- a/tla/etcdraft.tla
++++ b/tla/etcdraft.tla
+@@ -316,6 +316,9 @@ CanProposeConf(i) ==
+ \* @type: Int => Bool;
+ Timeout(i) == /\ state[i] \in {Follower, Candidate}
+               /\ i \in GetConfig(i)
++              \* raft.go hup: no campaign with committed but unapplied conf
++              \* changes (hasUnappliedConfChanges).
++              /\ ~HasUnappliedCommittedConfig(i)
+               /\ state' = [state EXCEPT ![i] = Candidate]
+               /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]
+               /\ votedFor' = [votedFor EXCEPT ![i] = i]
+@@ -629,7 +632,19 @@ NoConflictAppendEntriesRequest(i, index, m) ==
+     /\ index > commitIndex[i]
+     /\ HasNoConflict(i, index, m.mentries)
+     /\ log' = [log EXCEPT ![i] = @ \o SubSeq(m.mentries, Len(@)-index+2, Len(m.mentries))]
+-    /\ UNCHANGED <<messageVars, serverVars, commitIndex, durableState>>
++    \* raft.go handleAppendEntries: raftLog.maybeAppend appends the entries
++    \* and commits up to min(m.Commit, last new index) in the same step, and
++    \* the reply carries the last new index (MsgAppResp{Index: lastnewi}).
++    /\ CommitTo(i, Min({m.mcommitIndex, m.mprevLogIndex + Len(m.mentries)}))
++    /\ Reply([mtype           |-> AppendEntriesResponse,
++              msubtype        |-> m.msubtype,
++              mterm           |-> currentTerm[i],
++              msuccess        |-> TRUE,
++              mmatchIndex     |-> m.mprevLogIndex + Len(m.mentries),
++              msource         |-> i,
++              mdest           |-> m.msource],
++              m)
++    /\ UNCHANGED <<serverVars, durableState>>
+ 
+ \* @type: (Int, Int, Bool, AEREQT) => Bool;
+ AcceptAppendEntriesRequest(i, j, logOk, m) ==
+-- 
+2.43.0
+

@@ -66,5 +66,5 @@ Files added in this fork (not from upstream):
 - `MCwitness.tla`, `MCwitness.cfg`: a 71-step hand-written behavior, checked
   by TLC, that elects two leaders in one term when F4 or F6 is off.
 - `Traceetcdraft-faithful.cfg`: trace validation with F4–F6 on (P4).
-- `upstream-patches/`: the F1–F6 and T1 changes as a patch for etcd-io/raft
-  (see its README).
+- `upstream-patches/`: the changes as a 7-commit series for etcd-io/raft,
+  with F4–F6 unconditional and a further Restart fix (see its README).
