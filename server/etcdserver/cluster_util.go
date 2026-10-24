@@ -335,12 +335,18 @@ func promoteMemberHTTP(ctx context.Context, url string, id uint64, peerRt http.R
 		return nil, errors.ErrTimeout
 	}
 	if resp.StatusCode == http.StatusPreconditionFailed {
-		// both ErrMemberNotLearner and ErrLearnerNotReady have same http status code
+		// ErrMemberNotLearner, ErrLearnerNotReady and the strict reconfig check errors share this status code
 		if strings.Contains(string(b), errors.ErrLearnerNotReady.Error()) {
 			return nil, errors.ErrLearnerNotReady
 		}
 		if strings.Contains(string(b), membership.ErrMemberNotLearner.Error()) {
 			return nil, membership.ErrMemberNotLearner
+		}
+		if strings.Contains(string(b), errors.ErrUnhealthy.Error()) {
+			return nil, errors.ErrUnhealthy
+		}
+		if strings.Contains(string(b), errors.ErrNotEnoughStartedMembers.Error()) {
+			return nil, errors.ErrNotEnoughStartedMembers
 		}
 		return nil, fmt.Errorf("member promote: unknown error(%s)", b)
 	}

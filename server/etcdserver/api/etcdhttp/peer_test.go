@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -35,6 +36,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
+	"go.etcd.io/etcd/server/v3/etcdserver/errors"
 )
 
 type fakeCluster struct {
@@ -283,5 +285,41 @@ func TestNewPeerHandlerOnMembersPromotePrefix(t *testing.T) {
 		if tt.checkBody && strings.Contains(string(body), tt.wKeyWords) {
 			t.Errorf("#%d: body: %s, want body to contain keywords: %s", i, body, tt.wKeyWords)
 		}
+	}
+}
+
+// fakePromoteServer is a fakeServer whose PromoteMember returns err.
+type fakePromoteServer struct {
+	fakeServer
+	err error
+}
+
+func (s *fakePromoteServer) PromoteMember(ctx context.Context, id uint64) ([]*membership.Member, error) {
+	return nil, s.err
+}
+
+// TestServeMemberPromoteErrors ensures peerMemberPromoteHandler returns the
+// refusals a forwarding member can act on with a distinct status code.
+func TestServeMemberPromoteErrors(t *testing.T) {
+	tests := []struct {
+		err   error
+		wcode int
+	}{
+		{membership.ErrIDNotFound, http.StatusNotFound},
+		{membership.ErrMemberNotLearner, http.StatusPreconditionFailed},
+		{errors.ErrLearnerNotReady, http.StatusPreconditionFailed},
+		{errors.ErrUnhealthy, http.StatusPreconditionFailed},
+		{errors.ErrNotEnoughStartedMembers, http.StatusPreconditionFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.err.Error(), func(t *testing.T) {
+			rw := httptest.NewRecorder()
+			h := newPeerMemberPromoteHandler(zaptest.NewLogger(t), &fakePromoteServer{fakeServer: fakeServer{cluster: &fakeCluster{}}, err: tt.err})
+			req, err := http.NewRequest(http.MethodPost, peerMemberPromotePrefix+"1", nil)
+			require.NoError(t, err)
+			h.ServeHTTP(rw, req)
+			require.Equal(t, tt.wcode, rw.Code)
+			require.Contains(t, rw.Body.String(), tt.err.Error())
+		})
 	}
 }

@@ -15,13 +15,19 @@
 package etcdserver
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
 	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/client/pkg/v3/types"
+	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
+	"go.etcd.io/etcd/server/v3/etcdserver/errors"
 )
 
 func TestIsCompatibleWithVers(t *testing.T) {
@@ -173,6 +179,26 @@ func TestDecideAllowedVersionRange(t *testing.T) {
 			if !maxV.Equal(tt.expectedMaxV) {
 				t.Errorf("Expected maxV is %v; Got %v", tt.expectedMaxV.String(), maxV.String())
 			}
+		})
+	}
+}
+
+// TestPromoteMemberHTTPErrors ensures a promote forwarded to the leader
+// returns the leader's refusal, so the forwarding member can stop retrying.
+func TestPromoteMemberHTTPErrors(t *testing.T) {
+	for _, want := range []error{
+		membership.ErrMemberNotLearner,
+		errors.ErrLearnerNotReady,
+		errors.ErrUnhealthy,
+		errors.ErrNotEnoughStartedMembers,
+	} {
+		t.Run(want.Error(), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, want.Error(), http.StatusPreconditionFailed)
+			}))
+			defer srv.Close()
+			_, err := promoteMemberHTTP(context.Background(), srv.URL, 1, http.DefaultTransport)
+			require.ErrorIs(t, err, want)
 		})
 	}
 }
