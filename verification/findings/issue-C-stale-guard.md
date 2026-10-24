@@ -1,36 +1,41 @@
-# Draft issue (etcd-io/etcd): membership guards run on the receiving member's view, so back-to-back changes can lose quorum despite StrictReconfigCheck
+# Draft issue (etcd-io/etcd): StrictReconfigCheck evaluates member add/remove against the receiving member's possibly stale membership
 
 **What happened?**
 
-`mayAddMember` and `mayRemoveMember` run on whichever member receives the
-request, against that member's local membership. They don't wait for it to
-apply pending entries. Raft allows only one conf change in flight, but it
-checks that at the leader, later, and it doesn't re-run the quorum checks.
-So a change can be judged against a config it isn't applied to:
+With `--strict-reconfig-check` (the default), `mayAddMember` and
+`mayRemoveMember` refuse a change that would leave too few reachable
+voters. They run on whichever member receives the request, against that
+member's local membership, and they don't wait for it to apply entries
+that are already committed. A follower that hasn't yet applied a committed
+membership change therefore checks the next change against the old
+membership, and can accept a change that the leader would refuse.
 
-- **Stale view.** The member receiving the second change hasn't applied the
-  first yet.
-- **Concurrent requests.** Both changes pass their checks before either
-  commits; raft then applies them in sequence.
+Two concrete cases, each starting from 4 voters with one down:
 
-Concrete case, 4 voters with one down:
+**Remove** (all versions with the current remove guard: v3.4.x to v3.7.x,
+and main):
+1. Remove a running voter B through the leader. Result: 3 voters, 2 up.
+   Accepted.
+2. Remove follower S through S itself, before S has applied step 1. S
+   still counts 4 voters with B connected, so it accepts. Result: 2 voters,
+   1 up.
 
-1. Add voter n0 (not started yet) through the leader. Accepted: 5 voters,
-   3 running, quorum 3.
-2. The same add for n1, sent to the leader, is refused ("unhealthy
-   cluster").
-3. The same add for n1, sent to a follower that hasn't applied step 1 yet,
-   is accepted: the follower still sees 4 voters.
-4. Result: 6 voters, 3 running, quorum 4. Writes time out.
+**Add** (v3.5.30+, v3.6.11+, v3.7.x and main; it needs the
+quorum-after-add check from #21641):
+1. Add voter n0 (not yet started) through the leader. Result: 5 voters,
+   3 up. Accepted.
+2. Add voter n1 through a follower that hasn't applied step 1. It sees 4
+   voters, so it accepts. Result: 6 voters, 3 up, quorum 4.
 
-A remove-based variant needs only the remove guard:
-1. 4 voters, one down. Remove B through the leader.
-2. Remove S through S itself, before S has applied B's removal. S still
-   counts B as connected, so it accepts.
-3. Result: 2 voters, 1 running.
+In both cases, writes fail until enough members are started again
+(n0/n1, or the down voter).
 
-Enumerating the guard formulas for 1–5 voters, every case where only the
-stale view accepts a quorum-losing change starts from 2 or 4 voters.
+The window is the follower's apply lag. It is usually short, but routine:
+clients with several endpoints spread consecutive member commands across
+members. While a follower has a committed but unapplied conf change, its
+raft loop waits for the apply, so its own proposal reaches the leader only
+after it has applied the first change. By then the leader has applied it
+too and accepts the second change.
 
 **What did you expect to happen?**
 
@@ -39,48 +44,102 @@ refused, whichever member receives it.
 
 **How can we reproduce it?**
 
-The window is the apply lag on a follower, which is short but routine.
-Clients with several endpoints spread consecutive member commands across
-members. Our integration tests widen the window deterministically by
-holding the follower's backend read lock, which blocks its apply loop
-before it updates its membership view. Both variants reproduce 3/3.
+The existing failpoint `beforeApplyOneConfChange` delays one follower's
+apply by 500ms. That is well below the election timeout, so the leader
+keeps its quorum, and wide enough to hit by hand. It needs binaries built
+with `make gofail-enable && make build`.
+
+- **e2e test:** `TestMemberReconfigStaleView` (in the PR), with add and
+  remove subtests. It fails 6/6 on main and passes with the fix.
+- **Script:** `C-stale-view.sh add|remove` (attached; bash plus `etcd` and
+  `etcdctl`).
+
+  ```
+  $ ETCD_BIN_DIR=./bin ./C-stale-view.sh add
+  --- add voter n0 (not started) through the leader: 5 voters, 3 up
+  --- add voter n1 through m2: 6 voters, 3 up
+  --- accepted
+  RESULT: write failed after the second change; quorum lost (bug reproduced)
+  ```
+
+  For remove, the script also delays the removed member's apply.
+  Otherwise it closes its connections as soon as it applies its own
+  removal, which is faster than an etcdctl round trip.
 
 **Anything else we need to know?**
 
-- #21641 (v3.6.11, v3.5.30) relaxed the add check from "connected to all
-  voters" to "connected to a quorum after the add". The add-based case
-  above needs one voter down, so it applies only from those versions on.
-  The remove-based case applies to earlier versions too (identical remove
-  guard in v3.5.29 and v3.6.10).
-- Checking on an up-to-date view alone is not enough: two requests can
-  both pass before either commits. Directions that close it in a TLA+
-  model of the server's membership logic (no violation within bounds):
-  1. Re-run the guard on the leader when it appends the entry, where raft's
-     pending-change rule already serializes changes.
-  2. Or carry the config index the guard checked and refuse at append time
-     if the config changed.
-- Connectivity is still observed with a lag (`HealthInterval`), so a crash
-  the transport hasn't noticed yet remains a limitation either way.
+- **Fix:** [link to PR]. Before running the checks, wait for a
+  linearizable read barrier, as linearizable `MemberList` does. The checks
+  then see every committed membership change. It is small and can be
+  backported.
+- **Residual case, not covered by the fix:** a change checked on a
+  follower *before* the previous change has committed. The barrier passes,
+  and the follower's proposal can still reach the leader after the leader
+  has applied the previous change.
+  - Closing this needs the check to be serialized with raft's own
+    one-change-at-a-time rule. Options: forward add/remove to the leader
+    and check there (as promote does), or carry what was checked in the
+    conf change and reject at apply time.
+  - The second option has a precondition. Replaying a rejected remove
+    during restart currently still runs its side effects (stopping the
+    member, removing the peer), because `applyConfChange` skips validation
+    when `shouldApplyV3` is false. Today a valid remove is never rejected,
+    so this doesn't matter; it would matter once one can be.
+  - Happy to discuss this separately.
+- **Practical likelihood:** both cases depart from the documented
+  runtime-reconfiguration procedure. The add case adds a voter before the
+  previous one has started; the remove case removes a second voter while
+  one is down. The checks exist to catch such mistakes, though, and they
+  catch them when the request reaches the leader.
+- **Related:** #21640 and #21641 (the add check), #16798. We found no
+  duplicate.
 
-**Etcd version:** main at bf9cadf; v3.5.29, v3.6.10 (remove guard, code
-inspection).
+**Etcd version (please run commands below)**
 
-**Candidate fixes:** two options, either or both:
-1. [`fix/membership-check-committed-view`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/membership-check-committed-view):
-   a linearizable read barrier before the add/remove guards, so they run
-   on a view that includes every committed change. Small, no data change,
-   but it closes only the stale-view case, not two concurrent requests,
-   and adds a ReadIndex round trip to member add/remove.
-2. [`fix/membership-check-cas`](https://github.com/etcd-io/etcd/compare/main...zjs:etcd:fix/membership-check-cas): the conf
-   change carries a digest of the membership the guard checked (add,
-   promote, remove); apply rejects it with a new `ErrMembershipChanged`
-   (`FailedPrecondition`) if the membership differs. The decision depends
-   only on replicated state, so all members agree. It closes both cases
-   (in the model, no violation within bounds). Older members ignore the
-   field, so it is only set from cluster version 3.8. A change that would
-   still have been safe is rejected if the membership changed in between;
-   the client retries.
+```
+$ etcd --version
+etcd Version: 3.8.0-alpha.0
+Git SHA: 3aaab3479
+```
 
-Option 2 needs a decision on the API surface (error code) and version
-gating. Option 1 has no upstream-style test, because the window is too
-short to hit without the apply-loop freeze our reproduction uses.
+Also present (by code inspection) in v3.4.45 (remove case), v3.5.35,
+v3.6.16 and v3.7.3.
+
+**Etcd configuration (command line flags or environment variables)**
+
+Defaults, four members on localhost; see the script.
+
+**Relevant log output**
+
+On the stale follower, with the fix:
+
+```
+"msg":"rejecting member add request; local member has not been connected to majority peers, reconfigure breaks active quorum"
+```
+
+---
+
+## PR description (draft)
+
+**etcdserver: check member add/remove against the committed membership**
+
+Fixes #NNNN (stale-view case).
+
+- `AddMember` and `RemoveMember` now wait for a linearizable read barrier
+  before `mayAddMember` / `mayRemoveMember`, with strict reconfig check
+  only.
+  - The barrier waits until the local member has applied everything the
+    leader had committed.
+  - `applyConfChange` updates the membership before the applied index
+    advances, so the checks see every committed change.
+- **Cost:** one ReadIndex round trip per member add or remove.
+- **Without a leader:** the request fails with the barrier's error after
+  the request timeout. Before, it failed fast with `ErrUnhealthy`, or the
+  proposal waited in `configure`.
+- **Promote** already waits for the applied index on the leader
+  (`isLearnerReady` → `waitAppliedIndex`).
+- **Test:** `TestMemberReconfigStaleView` (e2e, failpoint
+  `beforeApplyOneConfChange`, add and remove). It fails on main.
+- **Backports:** the remove case affects release-3.4 to release-3.7. The
+  barrier exists there (`linearizableReadNotify`), so the change can be
+  cherry-picked. A CHANGELOG entry can be added once this has a PR number.
