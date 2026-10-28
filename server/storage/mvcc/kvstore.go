@@ -138,6 +138,10 @@ func (s *store) compactBarrier(ctx context.Context, ch chan struct{}) {
 	if ctx == nil || ctx.Err() != nil {
 		select {
 		case <-s.stopc:
+			// The store is being restored or closed, so this compaction will
+			// never run against this backend. Release the waiters anyway (e.g.
+			// a physical Compact request), otherwise they would block forever.
+			close(ch)
 		default:
 			// fix deadlock in mvcc, for more information, please refer to pr 11817.
 			// s.stopc is only updated in restore operation, which is called by apply
