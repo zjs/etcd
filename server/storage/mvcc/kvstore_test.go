@@ -485,6 +485,43 @@ func TestRestoreDelete(t *testing.T) {
 	}
 }
 
+// A compaction that is still queued when Restore runs must still signal
+// its done channel; otherwise a physical Compact RPC waits forever.
+func TestCompactionQueuedAcrossRestoreSignalsDone(t *testing.T) {
+	b, _ := betesting.NewDefaultTmpBackend(t)
+	s := NewStore(zaptest.NewLogger(t), b, &lease.FakeLessor{}, StoreConfig{
+		CompactionBatchLimit:    1,
+		CompactionSleepInterval: time.Hour, // keep the first job busy between batches
+	})
+	defer cleanup(s, b)
+
+	for i := 0; i < 5; i++ {
+		s.Put([]byte("foo"), []byte("bar"), lease.NoLease)
+	}
+
+	ch1, err := s.Compact(traceutil.TODO(), 3) // runs, then sleeps after its first batch
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch2, err := s.Compact(traceutil.TODO(), 4) // queued behind the first job
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	if err := s.Restore(b); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, ch := range []<-chan struct{}{ch1, ch2} {
+		select {
+		case <-ch:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("compaction %d: done channel never closed after Restore", i+1)
+		}
+	}
+}
+
 func TestRestoreContinueUnfinishedCompaction(t *testing.T) {
 	tests := []string{"recreate", "restore"}
 	for _, test := range tests {
