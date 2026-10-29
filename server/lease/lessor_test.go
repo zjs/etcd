@@ -305,6 +305,97 @@ func TestLessorRenewWithCheckpointer(t *testing.T) {
 	}
 }
 
+// TestLessorRenewDuringScheduledCheckpoint ensures that a scheduled checkpoint
+// computed before a renewal, but applied after it, does not leave a stale
+// remainingTTL behind. Otherwise the next leader would expire the lease before
+// the TTL promised by the renewal.
+func TestLessorRenewDuringScheduledCheckpoint(t *testing.T) {
+	lg := zaptest.NewLogger(t)
+	dir, be := NewTestBackend(t)
+	defer os.RemoveAll(dir)
+	defer be.Close()
+
+	le := newLessor(lg, be, clusterLatest(), LessorConfig{MinLeaseTTL: minLeaseTTL, CheckpointInterval: time.Second})
+	defer le.Stop()
+	le.minLeaseTTL = 1
+
+	// The checkpointer applies checkpoints like raft would, except that it
+	// holds the first scheduled checkpoint with Remaining_TTL <= 3 in flight
+	// until released.
+	inflight := make(chan struct{})
+	release := make(chan struct{})
+	heldApplied := make(chan struct{})
+	var held sync.Once
+	le.SetCheckpointer(func(ctx context.Context, lc *pb.LeaseCheckpointRequest) error {
+		isHeld := false
+		for _, c := range lc.GetCheckpoints() {
+			if c.GetRemaining_TTL() > 0 && c.GetRemaining_TTL() <= 3 {
+				held.Do(func() {
+					isHeld = true
+					close(inflight)
+					<-release
+				})
+			}
+		}
+		for _, c := range lc.GetCheckpoints() {
+			le.Checkpoint(LeaseID(c.GetID()), c.GetRemaining_TTL())
+		}
+		if isHeld {
+			close(heldApplied)
+		}
+		return nil
+	})
+	le.Promote(0)
+
+	const ttl = 6
+	l, err := le.Grant(1, ttl)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-inflight:
+	case <-time.After(10 * time.Second):
+		t.Fatal("scheduled checkpoint was not proposed")
+	}
+
+	// Renew while the scheduled checkpoint is in flight. The lessor may wait
+	// for it, so release it concurrently.
+	renewed := make(chan error, 1)
+	go func() {
+		_, rerr := le.Renew(l.ID)
+		renewed <- rerr
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	select {
+	case rerr := <-renewed:
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("renew did not return")
+	}
+	renewedAt := time.Now()
+
+	select {
+	case <-heldApplied:
+	case <-time.After(10 * time.Second):
+		t.Fatal("held checkpoint was not applied")
+	}
+
+	// Leader change: the new leader restores the lease from the replicated
+	// remainingTTL.
+	le.Demote()
+	le.Promote(0)
+
+	promised := renewedAt.Add(ttl * time.Second)
+	if expiry := time.Now().Add(l.Remaining()); expiry.Before(promised.Add(-500 * time.Millisecond)) {
+		t.Fatalf("lease expires %v before the TTL promised by the renewal (remainingTTL=%d)",
+			promised.Sub(expiry), l.getRemainingTTL())
+	}
+}
+
 // TestLessorRenewExtendPileup ensures Lessor extends leases on promotion if too many
 // expire at the same time.
 func TestLessorRenewExtendPileup(t *testing.T) {

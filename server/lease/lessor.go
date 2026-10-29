@@ -408,9 +408,6 @@ func (le *lessor) Renew(id LeaseID) (int64, error) {
 		le.mu.RUnlock()
 		return -1, ErrLeaseNotFound
 	}
-	// Clear remaining TTL when we renew if it is set
-	clearRemainingTTL := le.cp != nil && l.remainingTTL > 0
-
 	le.mu.RUnlock()
 	if l.expired() {
 		select {
@@ -428,6 +425,16 @@ func (le *lessor) Renew(id LeaseID) (int64, error) {
 		}
 	}
 
+	// Wait for any scheduled checkpoint of this lease that is in flight, and
+	// keep new ones from being computed until the expiry is refreshed below.
+	l.checkpointMu.Lock()
+	defer l.checkpointMu.Unlock()
+
+	le.mu.RLock()
+	// Clear remaining TTL when we renew if it is set
+	clearRemainingTTL := le.cp != nil && l.remainingTTL > 0
+	le.mu.RUnlock()
+
 	// gofail: var beforeCheckpointInLeaseRenew struct{}
 
 	// Clear remaining TTL when we renew if it is set
@@ -440,6 +447,15 @@ func (le *lessor) Renew(id LeaseID) (int64, error) {
 	}
 
 	le.mu.Lock()
+	// The new leader restores the lease from the replicated remainingTTL, not
+	// from this member's refresh below, so don't acknowledge the renewal if
+	// this member lost its leadership meanwhile.
+	select {
+	case <-demotec:
+		le.mu.Unlock()
+		return -1, ErrNotPrimary
+	default:
+	}
 	// Re-check in case the lease was revoked immediately after the previous check
 	l = le.leaseMap[id]
 	if l == nil {
@@ -668,15 +684,28 @@ func (le *lessor) checkpointScheduledLeases() {
 	// rate limit
 	for i := 0; i < leaseCheckpointRate/2; i++ {
 		var cps []*pb.LeaseCheckpoint
+		var locked []*Lease
 
 		le.mu.Lock()
 		if le.isPrimary() {
-			cps = le.findDueScheduledCheckpoints(maxLeaseCheckpointBatchSize)
+			cps, locked = le.findDueScheduledCheckpoints(maxLeaseCheckpointBatchSize)
 		}
 		le.mu.Unlock()
 
 		if len(cps) != 0 {
-			if err := le.cp(context.Background(), &pb.LeaseCheckpointRequest{Checkpoints: cps}); err != nil {
+			err := le.cp(context.Background(), &pb.LeaseCheckpointRequest{Checkpoints: cps})
+			for _, l := range locked {
+				l.checkpointMu.Unlock()
+			}
+			if err != nil {
+				le.mu.Lock()
+				if le.isPrimary() {
+					// try again later
+					for _, l := range locked {
+						le.scheduleCheckpointIfNeeded(l)
+					}
+				}
+				le.mu.Unlock()
 				return
 			}
 		}
@@ -769,17 +798,21 @@ func (le *lessor) scheduleCheckpointIfNeeded(lease *Lease) {
 	}
 }
 
-func (le *lessor) findDueScheduledCheckpoints(checkpointLimit int) []*pb.LeaseCheckpoint {
+// findDueScheduledCheckpoints returns the due checkpoints and the leases they
+// are for. It locks each returned lease's checkpointMu; the caller unlocks them
+// once the checkpoints are applied or failed.
+func (le *lessor) findDueScheduledCheckpoints(checkpointLimit int) ([]*pb.LeaseCheckpoint, []*Lease) {
 	if le.cp == nil {
-		return nil
+		return nil, nil
 	}
 
 	now := time.Now()
 	var cps []*pb.LeaseCheckpoint
+	var locked []*Lease
 	for le.leaseCheckpointHeap.Len() > 0 && len(cps) < checkpointLimit {
 		lt := le.leaseCheckpointHeap[0]
 		if lt.time.After(now) /* lt.time: next checkpoint time */ {
-			return cps
+			return cps, locked
 		}
 		heap.Pop(&le.leaseCheckpointHeap)
 		var l *Lease
@@ -787,11 +820,18 @@ func (le *lessor) findDueScheduledCheckpoints(checkpointLimit int) []*pb.LeaseCh
 		if l, ok = le.leaseMap[lt.id]; !ok {
 			continue
 		}
+		if !l.checkpointMu.TryLock() {
+			// A renewal of this lease is in progress; checkpoint it later.
+			le.scheduleCheckpointIfNeeded(l)
+			continue
+		}
 		if !now.Before(l.expiry) {
+			l.checkpointMu.Unlock()
 			continue
 		}
 		remainingTTL := int64(math.Ceil(l.expiry.Sub(now).Seconds()))
 		if remainingTTL >= l.ttl {
+			l.checkpointMu.Unlock()
 			continue
 		}
 		if le.lg != nil {
@@ -801,8 +841,9 @@ func (le *lessor) findDueScheduledCheckpoints(checkpointLimit int) []*pb.LeaseCh
 			)
 		}
 		cps = append(cps, &pb.LeaseCheckpoint{ID: int64(lt.id), Remaining_TTL: remainingTTL})
+		locked = append(locked, l)
 	}
-	return cps
+	return cps, locked
 }
 
 func (le *lessor) initAndRecover() {
