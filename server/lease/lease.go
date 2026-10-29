@@ -33,6 +33,13 @@ type Lease struct {
 	// expiry is time when lease should expire. no expiration when expiry.IsZero() is true
 	expiry time.Time
 
+	// checkpointMu is held by Renew from deciding whether to clear
+	// remainingTTL until it refreshes the expiry, and by a scheduled checkpoint
+	// of this lease from computing its remaining TTL until it is applied.
+	// Otherwise a checkpoint computed from the expiry before a renewal could be
+	// applied after it, and the next leader would expire the lease early.
+	checkpointMu sync.Mutex
+
 	// mu protects concurrent accesses to itemSet
 	mu      sync.RWMutex
 	itemSet map[LeaseItem]struct{}
