@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	bolt "go.etcd.io/bbolt"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/client/pkg/v3/verify"
 )
 
@@ -590,6 +591,14 @@ func (b *backend) finishDefrag(tmpdb *bolt.DB, tdbp, dbp string, now time.Time, 
 		b.cleanupTmpDB(tmpdb, tdbp)
 		b.lg.Fatal("failed to rename tmp database", zap.Error(err))
 	}
+	// Make the rename durable. Otherwise, after a power loss, the directory may
+	// still point at the pre-defrag db while every later write went to the
+	// defragmented file, which is deleted on bootstrap as an orphaned db.tmp.*.
+	if !b.bopts.NoSync {
+		if err = fsyncDir(filepath.Dir(dbp)); err != nil {
+			b.lg.Fatal("failed to fsync directory after renaming tmp database", zap.Error(err))
+		}
+	}
 
 	b.db, err = bolt.Open(dbp, 0o600, b.bopts)
 	if err != nil {
@@ -621,6 +630,16 @@ func (b *backend) finishDefrag(tmpdb *bolt.DB, tdbp, dbp string, now time.Time, 
 		zap.Duration("took", took),
 	)
 	return nil
+}
+
+// fsyncDir syncs a directory so that a rename inside it is durable.
+var fsyncDir = func(dir string) error {
+	d, err := fileutil.OpenDir(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return fileutil.Fsync(d)
 }
 
 func (b *backend) defragBlocking() error {

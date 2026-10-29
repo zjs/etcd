@@ -17,10 +17,12 @@ package storage
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"go.uber.org/zap"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/features"
@@ -68,7 +70,25 @@ func OpenSnapshotBackend(cfg config.ServerConfig, ss *snap.Snapshotter, snapshot
 	if err := os.Rename(snapPath, cfg.BackendPath()); err != nil {
 		return nil, fmt.Errorf("failed to rename database snapshot file (%w)", err)
 	}
+	// Make the rename durable. Otherwise, after a power loss, the directory may
+	// still point at the old db while the WAL already holds a newer snapshot
+	// record, and the member fails to start.
+	if !cfg.UnsafeNoFsync {
+		if err := fsyncDir(filepath.Dir(cfg.BackendPath())); err != nil {
+			return nil, fmt.Errorf("failed to fsync directory after renaming database snapshot file (%w)", err)
+		}
+	}
 	return OpenBackend(cfg, hooks), nil
+}
+
+// fsyncDir syncs a directory so that a rename inside it is durable.
+var fsyncDir = func(dir string) error {
+	d, err := fileutil.OpenDir(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return fileutil.Fsync(d)
 }
 
 // OpenBackend returns a backend using the current etcd db.
