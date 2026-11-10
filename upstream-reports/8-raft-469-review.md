@@ -17,7 +17,7 @@ approver). Everything marked *ran* was run on PR head `6de2d22` with TLC
 | `MCetcdraft.cfg`, simulation, depth 100, 150 s | no violation, about 2.4M states (*ran*) |
 | `HasUnappliedConfChange` against `hasUnappliedConfChanges()` in `raft.go` | equivalent, given that the spec applies the latest committed config entry in one step (read, not run) |
 | every action that assigns `config'` also assigns `appliedConfChangeIndex'` | yes: `Restart`, `ApplySimpleConfChange`; all others leave `configVars` unchanged (read) |
-| Trace validation of `example.ndjson` | [fill in: see README] |
+| Trace validation of `example.ndjson` (`Traceetcdraft.cfg`, including `TraceMatched`) | passes: progress 100%, 4,998 distinct states, 46 min (*ran*). So the guard does not reject the recorded run. |
 
 ### The guard is not sufficient on its own
 
