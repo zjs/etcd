@@ -36,3 +36,11 @@ func CommitsForTest(b Backend) int64 {
 func IsDefragActiveForTest() bool {
 	return testutil.ToFloat64(isDefragActive) == 1
 }
+
+// SetFsyncDirForTest replaces the directory fsync used after renaming the
+// defragmented db, and returns a function that restores it.
+func SetFsyncDirForTest(f func(dir string) error) (restore func()) {
+	old := fsyncDir
+	fsyncDir = f
+	return func() { fsyncDir = old }
+}

@@ -17,6 +17,7 @@ package backend_test
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -487,5 +488,32 @@ func TestBackendWritebackForEach(t *testing.T) {
 
 	if seq != partialSeq {
 		t.Fatalf("expected %q, got %q", seq, partialSeq)
+	}
+}
+
+func TestBackendDefragSyncsDirectory(t *testing.T) {
+	for _, nonBlocking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nonBlocking=%v", nonBlocking), func(t *testing.T) {
+			bcfg := backend.DefaultBackendConfig(zaptest.NewLogger(t))
+			bcfg.NonBlockingDefrag = nonBlocking
+			b, path := betesting.NewTmpBackendFromCfg(t, bcfg)
+			defer betesting.Close(t, b)
+
+			var synced []string
+			defer backend.SetFsyncDirForTest(func(dir string) error {
+				synced = append(synced, dir)
+				return nil
+			})()
+
+			tx := b.BatchTx()
+			tx.Lock()
+			tx.UnsafeCreateBucket(schema.Test)
+			tx.UnsafePut(schema.Test, []byte("foo"), []byte("bar"))
+			tx.Unlock()
+			b.ForceCommit()
+
+			require.NoError(t, b.Defrag())
+			require.Equal(t, []string{filepath.Dir(path)}, synced)
+		})
 	}
 }
