@@ -181,9 +181,9 @@ fi
   1. forward add and remove to the leader and check there, as promote does;
   2. carry what was checked in the conf change and reject at apply.
 - **Direction is the maintainers' call.** Which of those you'd accept decides whether the barrier is worth merging on its own or should be replaced, so I'm holding off on a PR until then.
-- **If you'd like to work on this,** please start from the branch above rather than from scratch, and feel free to review it, test it or build on it; I'd rather coordinate than duplicate. Two things that cost me time and aren't obvious:
+- **If you'd like to work on this,** please start from the branch above rather than from scratch, and feel free to review it, test it or build on it; I'd rather coordinate than duplicate. Two things that aren't obvious:
   - To reproduce the remove case, the removed member's apply has to be delayed as well. Otherwise it closes its connections as soon as it applies its own removal, and the stale member no longer counts it as connected.
-  - Option 2 has a precondition. Replaying a rejected remove on restart still runs its side effects (stopping the member, removing the peer), because `applyConfChange` skips validation when `shouldApplyV3` is false. That doesn't matter today, since a valid remove is never rejected.
+  - Option 2 has a precondition. Replaying a rejected remove on restart still runs its side effects (stopping the member, removing the peer), because `ValidateConfigurationChange` returns early when `shouldApplyV3` is false. That doesn't matter today, since a valid remove is never rejected.
 - **Related:** #22758 (promote has no reachability check; same question of where these checks should run), #21640 and #21641 (the add check), #16798.
 - **AI disclosure.** This was found by an AI agent (Claude Code) that I directed to model this part of etcd in TLA+ and check the model against the code. The agent also wrote the reproduction, the linked branch and the first draft of this report. I have run the reproduction and read the code paths described here, and I'll answer questions myself. If you accept this issue as valid and tell me which direction you prefer, I'll open a PR for it.
 
