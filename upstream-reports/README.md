@@ -11,9 +11,10 @@ main `c51f010`. Nothing here has been posted.
 | 2 | `2-reconfig-check-stale-view.md` | new issue, etcd-io/etcd | `zjs/etcd:report/reconfig-check-stale-view` |
 | 3 | `3-compaction-waiter-after-restore.md` | new issue, etcd-io/etcd | `zjs/etcd:report/compaction-waiter-after-restore` |
 | 4 | `4-max-learners-divergence.md` | new issue, etcd-io/etcd (design discussion, no fix) | `zjs/etcd:report/max-learners-divergence` (repro only) |
-| 5 | `5-raft-tla-comments.md` | comments on etcd-io/raft #469, #458, #456 | `zjs/raft:report/tla-membership-restart` |
+| 5 | `8-raft-469-review.md`, then `5-raft-tla-comments.md` | review on etcd-io/raft #469; comments on #458 and #456 | `zjs/raft:report/tla-membership-restart` |
 | 6 | `6-defrag-dir-fsync-comment.md` | comment on etcd-io/etcd #22498 | `zjs/etcd:report/defrag-dir-fsync` |
 | 7 | `7-lease-checkpoint-comment.md` | comment on etcd-io/etcd PR #22650 | `zjs/etcd:report/lease-checkpoint-renew-race` |
+| 8 | `9-etcd-22702-confirmation.md` | comment on etcd-io/etcd PR #22702 (someone else's fix, confirmed independently) | none |
 
 1 and 2 share a code path and a design question (where the strict reconfig
 checks should run); post them together and cross-link them.
