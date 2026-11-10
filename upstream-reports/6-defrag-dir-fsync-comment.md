@@ -13,4 +13,4 @@ I have not reproduced this with a real power loss; it is from reading the code, 
 
 A candidate change, in case it is useful to whoever picks up this issue: [`zjs/etcd:report/defrag-dir-fsync`](https://github.com/zjs/etcd/tree/report/defrag-dir-fsync) (one commit; syncs the directory after the rename unless `--unsafe-no-fsync` is set, for both blocking and non-blocking defrag). I can open a PR, or it can be folded into whichever of the two existing PRs you prefer.
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.

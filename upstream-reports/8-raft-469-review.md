@@ -76,4 +76,4 @@ Both PRs add the same guard to `Timeout`. #458 compares `config[i]` with the con
 - Exhaustive model checking: the counterexamples are 70+ steps deep, beyond what breadth-first search reaches.
 - The original `BugDriver` attached to #456.
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.

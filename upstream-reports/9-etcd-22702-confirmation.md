@@ -21,4 +21,4 @@ From reading the code, the mechanism is as the comment in the change says: a cat
 
 The rest of `./integration/proxy/grpcproxy/` still passes with the change. I did not run the wider proxy test configuration (`make test-grpcproxy-integration`).
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.

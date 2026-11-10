@@ -7,8 +7,8 @@ main `c51f010`. Nothing here has been posted.
 
 | # | File | Where | Branch it links to |
 |---|---|---|---|
-| 1 | `1-promote-unreachable-learner.md` | new issue, etcd-io/etcd | `zjs/etcd:report/promote-unreachable-learner` |
-| 2 | `2-reconfig-check-stale-view.md` | new issue, etcd-io/etcd | `zjs/etcd:report/reconfig-check-stale-view` |
+| 1 | `1-promote-unreachable-learner.md` | **filed as etcd-io/etcd#22758** | `zjs/etcd:report/promote-unreachable-learner` |
+| 2 | `2-reconfig-check-stale-view.md` | **filed as etcd-io/etcd#22764** | `zjs/etcd:report/reconfig-check-stale-view` |
 | 3 | `3-compaction-waiter-after-restore.md` | new issue, etcd-io/etcd | `zjs/etcd:report/compaction-waiter-after-restore` |
 | 4 | `4-max-learners-divergence.md` | new issue, etcd-io/etcd (design discussion, no fix) | `zjs/etcd:report/max-learners-divergence` (repro only) |
 | 5 | `8-raft-469-review.md`, then `5-raft-tla-comments.md` | review on etcd-io/raft #469; comments on #458 and #456 | `zjs/raft:report/tla-membership-restart` |
@@ -21,23 +21,10 @@ checks should run); post them together and cross-link them.
 
 ## Disclosure
 
-Suggested wording, to replace each `[see README.md, "Disclosure"]`. Adjust
-it until every sentence is true of what you did yourself.
-
-For the issues with a candidate fix (1, 2, 3):
-
-> **AI disclosure.** This was found by an AI agent (Claude Code) that I
-> directed to model this part of etcd in TLA+ and check the model against
-> the code. The agent also wrote the reproduction, the linked branch and the
-> first draft of this report. I have run the reproduction and read the code
-> paths described here, and I'll answer questions myself. I haven't opened a
-> PR because I'd rather you decide on the approach first.
-
-For 4, drop "the linked branch" and the last sentence. For the comments
-(5, 6, 7), one line is enough:
-
-> AI disclosure: found with an AI agent (Claude Code) under my direction; I
-> have run the witness/test above myself and will answer follow-ups myself.
+Every draft now carries its disclosure text inline; nothing refers back to
+this file. The issues use the wording from #22758, with the last sentence
+adapted to whether a candidate fix exists. The comments and the review use
+one line.
 
 ## Before posting
 

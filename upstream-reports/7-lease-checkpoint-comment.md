@@ -18,4 +18,4 @@ The branch closes the race with a per-lease mutex, which a renewal holds across 
 
 Also on the branch: `Renew` returns `ErrNotPrimary` if the lessor was demoted while it waited for its checkpoint, instead of acknowledging the renewal.
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.

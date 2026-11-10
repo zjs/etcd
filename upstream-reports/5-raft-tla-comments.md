@@ -8,7 +8,7 @@ Use the staged review in `8-raft-469-review.md` instead of a comment.
 
 The guard here is the same one as in #469, and the same gap applies: a second schedule still reaches two leaders in one term with this PR applied. Details, a replayable witness and a suggested change are in [my review of #469](link). #469 tracks an applied index and so follows `hasUnappliedConfChanges()` more closely; the two differ only when two changes return to an identical config.
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.
 
 ## Comment on issue #456
 
@@ -22,4 +22,4 @@ All of it is on one branch, one commit per item: [`zjs/raft:report/tla-membershi
 
 @serathius, on your point above that the spec needs its own approvers: I'd rather help get #469 reviewed than add a third PR to the queue. If a reviewer for `tla/` who isn't a maintainer would be useful, I'm willing to do that.
 
-AI disclosure: [see README.md, "Disclosure"]
+AI disclosure: found with an AI agent (Claude Code) under my direction; I have run the checks above myself and will answer follow-ups myself.
